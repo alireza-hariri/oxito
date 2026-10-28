@@ -4,6 +4,7 @@ mod app;
 mod clash;
 mod config;
 mod history;
+mod icon;
 mod monitor;
 mod procs;
 mod singbox;
@@ -59,7 +60,14 @@ fn main() -> eframe::Result {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("proxy2vpn")
             .with_app_id("proxy2vpn")
-            .with_inner_size([1280.0, 780.0]),
+            .with_inner_size(app::saved_window_size(&paths))
+            .with_icon(icon::icon_data(false)),
+        // X11 (XWayland on Wayland): native Wayland can't hide the window to the tray or bring it
+        // back, and ignores the window icon
+        event_loop_builder: Some(Box::new(|b| {
+            use winit::platform::x11::EventLoopBuilderExtX11;
+            b.with_x11();
+        })),
         ..Default::default()
     };
     eframe::run_native("proxy2vpn", opts, Box::new(|cc| Ok(Box::new(app::App::new(cc, paths)))))

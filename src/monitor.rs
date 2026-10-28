@@ -36,6 +36,7 @@ impl Monitor {
         db: PathBuf,
         retention: u64,
         interval: Duration,
+        on_sample: impl Fn(&[Instance]) + Send + 'static,
     ) -> Self {
         let snapshot = Arc::new(Mutex::new(Snapshot::default()));
         let api = Arc::new(Mutex::new(api));
@@ -74,6 +75,7 @@ impl Monitor {
                     },
                     Err(e) => (vec![], Some(format!("history db {}: {e}", db.display()))),
                 };
+                on_sample(&instances);
                 *snap.lock().unwrap() = Snapshot { procs, conns, api_error, instances, history, db_error };
                 ctx.request_repaint();
                 std::thread::sleep(interval);

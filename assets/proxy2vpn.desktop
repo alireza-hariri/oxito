@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=proxy2vpn
+GenericName=VPN Router
+Comment=Pick running apps and route them through the VPN via sing-box
+Exec=proxy2vpn
+Icon=proxy2vpn
+Terminal=false
+Categories=Network;
+Keywords=vpn;proxy;sing-box;
+StartupWMClass=proxy2vpn

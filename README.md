@@ -8,6 +8,9 @@ cargo build --release
 ./target/release/proxy2vpn            # or: proxy2vpn -c /path/to/config.json
 ```
 
+`./install.sh` builds and installs it for your user: the binary to `~/.local/bin`, the icon and an
+app-menu entry (`proxy2vpn.desktop`) under `~/.local/share`. Re-run it after pulling changes.
+
 ## What it does
 
 - **Apps** tab: only apps that sing-box has actually seen making connections. Each row is one
@@ -22,6 +25,11 @@ cargo build --release
     side panel (open connections, domains seen this session, running processes) with a
     **Route via VPN** / **Remove** button.
 - **VPN routes** tab: routed apps (`process_path`) and domains (`domain_suffix`); add or remove them.
+- **Icon** (`assets/proxy2vpn.svg`, also shown in the tray): green while sing-box runs this app's
+  config, blue when it doesn't; updates live.
+- **Shift+Enter** starts or stops sing-box. **Esc** hides the window to the tray; click the tray icon
+  (or its *Show* menu item) to bring it back. The window runs on X11/XWayland, since native
+  Wayland can't hide to and restore from the tray.
 - **sing-box** tab: binary path, status of every running instance, Reset / Reload / Stop / Check,
   and the live sing-box log.
 
@@ -39,7 +47,7 @@ change does a Reset instead.
 | `example_config.json` | Seed config (TUN in, socks → xray, chromium/node via VPN). Also built into the binary. |
 | `~/.config/proxy2vpn/config.json` | The working config the app edits and sing-box runs. Created from the example on first launch. |
 | `~/.config/proxy2vpn/config.rules.json` | The routed apps and domains: a sing-box rule-set the config points at, reloaded by sing-box when it changes. |
-| `~/.config/proxy2vpn/settings.json` | sing-box binary path, reset options |
+| `~/.config/proxy2vpn/settings.json` | sing-box binary path, reset options, zoom, window size (saved when you resize) |
 | `~/.local/state/proxy2vpn/history.db` | Session history (same schema as the old `p2v.py`). **Recreated empty at every launch** and pruned to the activity window every 10 s. |
 | `~/.local/state/proxy2vpn/` | also `sing-box.log`, pid files, `ctl` FIFO |
 | `archive/` | The previous Python CLI (`p2v.py`), its docs and the original configs |
@@ -71,8 +79,10 @@ app (or by an older version of its supervisor), the next change does a Reset ins
 | Key | Action |
 |---|---|
 | Space / Enter | route or unroute the selected app |
+| Shift+Enter | start / stop sing-box |
+| Esc | hide to the tray (in the filter box: clear it) |
+| H | show / hide the shortcut list |
 | ↑ ↓ (j k), Home / End | move selection |
-| Esc | close details / clear filter |
 | `/` or Ctrl+F | filter |
 | Alt+1 / 2 / 3 | switch tabs |
 | Ctrl+R | reset sing-box |

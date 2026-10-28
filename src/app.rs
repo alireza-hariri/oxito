@@ -3,6 +3,7 @@
 use crate::clash::{self, Conn};
 use crate::config::{Config, APP_KEY, DOMAIN_KEY};
 use crate::history::{self, Flow};
+use crate::icon::Indicator;
 use crate::monitor::{Monitor, Snapshot};
 use crate::singbox::{self, Instance};
 use crate::Paths;
@@ -16,10 +17,12 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 const FILTER_ID: &str = "filter";
-const SHORTCUTS: &str = "Space / Enter   route or unroute the selected app
+const SHORTCUTS: &str = "Space / Enter    route or unroute the selected app
+Shift+Enter      start / stop sing-box
+Esc              hide to tray (in the filter: clear it)
+H                show / hide this list
 ↑ ↓  (j k)       move selection
 Home / End       first / last app
-Esc              close details / clear filter
 /  or  Ctrl+F    filter
 Alt+1 2 3        switch tabs
 Ctrl+R           reset sing-box
@@ -43,12 +46,27 @@ struct Settings {
     window_secs: u64,
     /// UI scale (Ctrl +/−/0).
     zoom: f32,
+    /// Window inner size in logical pixels, restored at launch.
+    window_size: [f32; 2],
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { singbox: singbox::default_binary(), reset_on_start: true, stop_others: true, window_secs: 300, zoom: 1.25 }
+        Self { singbox: singbox::default_binary(), reset_on_start: true, stop_others: true, window_secs: 300, zoom: 1.25,
+            window_size: [960.0, 720.0],
+        }
     }
+}
+
+impl Settings {
+    fn load(path: &Path) -> Self {
+        fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    }
+}
+
+/// The window size saved by the last session (or the default).
+pub fn saved_window_size(paths: &Paths) -> [f32; 2] {
+    Settings::load(&paths.settings).window_size
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -164,6 +182,10 @@ pub struct App {
     messages: Vec<(String, bool)>,
     log_tail: String,
     log_read: Option<Instant>,
+    indicator: Indicator,
+    /// When the window was last seen at a size not yet saved; saved once resizing settles.
+    resized: Option<Instant>,
+    show_shortcuts: bool,
 }
 
 impl App {
@@ -187,10 +209,17 @@ impl App {
                 messages.push((e, true));
             }
         }
-        let settings: Settings =
-            fs::read_to_string(&paths.settings).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        let settings = Settings::load(&paths.settings);
         let db = paths.state.join("history.db");
-        let monitor = Monitor::start(cc.egui_ctx.clone(), cfg.api(), db, settings.window_secs, Duration::from_secs(1));
+        let (indicator, tray_err) = Indicator::new(&cc.egui_ctx);
+        messages.extend(tray_err.map(|e| (e, true)));
+        // the monitor thread keeps the icon current, even while the window is hidden and not redrawn
+        let (ind, config) = (indicator.clone(), paths.config.clone());
+        let on_sample = move |inst: &[Instance]| {
+            ind.set(inst.iter().any(|i| i.config.as_deref().is_some_and(|c| same_file(c, &config))));
+        };
+        let monitor =
+            Monitor::start(cc.egui_ctx.clone(), cfg.api(), db, settings.window_secs, Duration::from_secs(1), on_sample);
         let mut app = Self {
             paths,
             cfg,
@@ -214,6 +243,9 @@ impl App {
             messages,
             log_tail: String::new(),
             log_read: None,
+            indicator,
+            resized: None,
+            show_shortcuts: false,
         };
         cc.egui_ctx.set_zoom_factor(app.settings.zoom);
         app.save_settings();
@@ -483,7 +515,9 @@ impl App {
             ui.selectable_value(&mut self.tab, Tab::Routing, format!("VPN routes ({n})"));
             ui.selectable_value(&mut self.tab, Tab::SingBox, "sing-box");
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label("⌨").on_hover_text(SHORTCUTS);
+                if ui.button("⌨").on_hover_text("Keyboard shortcuts (H)").clicked() {
+                    self.show_shortcuts = !self.show_shortcuts;
+                }
                 if ui.small_button("A+").on_hover_text("Bigger (Ctrl +)").clicked() {
                     ui.ctx().set_zoom_factor((ui.ctx().zoom_factor() + 0.1).min(3.0));
                 }
@@ -751,24 +785,15 @@ impl App {
             return None;
         }
         let pos = self.selected.as_ref().and_then(|s| rows.iter().position(|r| &r.exe == s));
-        let (down, up, home, end, space, esc) = ctx.input_mut(|i| {
+        let (down, up, home, end, space) = ctx.input_mut(|i| {
             (
                 i.consume_key(Modifiers::NONE, Key::ArrowDown) || i.consume_key(Modifiers::NONE, Key::J),
                 i.consume_key(Modifiers::NONE, Key::ArrowUp) || i.consume_key(Modifiers::NONE, Key::K),
                 i.consume_key(Modifiers::NONE, Key::Home),
                 i.consume_key(Modifiers::NONE, Key::End),
                 i.consume_key(Modifiers::NONE, Key::Space) || i.consume_key(Modifiers::NONE, Key::Enter),
-                i.consume_key(Modifiers::NONE, Key::Escape),
             )
         });
-        if esc {
-            if self.details_open {
-                self.details_open = false;
-            } else {
-                self.selected = None;
-            }
-            return None;
-        }
         if space {
             if let Some(r) = pos.map(|i| &rows[i]).filter(|r| !r.exe.is_empty()) {
                 actions.push(if r.routed { Action::Unroute(r.exe.clone()) } else { Action::Route(r.exe.clone()) });
@@ -1033,30 +1058,77 @@ impl App {
     fn global_keys(&mut self, ctx: &egui::Context) {
         use egui::{Key, Modifiers};
         let typing = ctx.wants_keyboard_input();
-        let (tab, reset, focus_filter) = ctx.input_mut(|i| {
+        let (tab, reset, focus_filter, toggle, hide, help) = ctx.input_mut(|i| {
             let tab = [(Key::Num1, Tab::Apps), (Key::Num2, Tab::Routing), (Key::Num3, Tab::SingBox)]
                 .into_iter()
                 .find(|(k, _)| i.consume_key(Modifiers::ALT, *k))
                 .map(|(_, t)| t);
             let reset = i.consume_key(Modifiers::CTRL, Key::R);
             let focus = i.consume_key(Modifiers::CTRL, Key::F) || (!typing && i.consume_key(Modifiers::NONE, Key::Slash));
-            (tab, reset, focus)
+            // before the list sees Enter: a plain-Enter check also matches Shift+Enter
+            let toggle = !typing && i.consume_key(Modifiers::SHIFT, Key::Enter);
+            let hide = !typing && i.consume_key(Modifiers::NONE, Key::Escape);
+            let help = !typing && i.consume_key(Modifiers::NONE, Key::H);
+            (tab, reset, focus, toggle, hide, help)
         });
+        if help {
+            self.show_shortcuts = !self.show_shortcuts;
+        }
         if let Some(t) = tab {
             self.tab = t;
         }
         if reset && self.busy.is_none() {
             self.reset();
         }
+        if toggle && self.busy.is_none() {
+            if self.snap.instances.iter().any(|i| self.uses_our_config(i)) {
+                self.stop();
+            } else {
+                self.reset();
+            }
+        }
+        if hide && self.show_shortcuts {
+            self.show_shortcuts = false;
+        } else if hide {
+            if self.indicator.has_tray() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            } else {
+                self.msg(Err("no tray to hide to; minimising instead".into()));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            }
+        }
         if focus_filter {
             self.tab = Tab::Apps;
             ctx.memory_mut(|m| m.request_focus(egui::Id::new(FILTER_ID)));
         }
+        self.track_window_size(ctx);
         // eframe handles Ctrl +/−/0 itself; remember the result
         let zoom = ctx.zoom_factor();
         if (zoom - self.settings.zoom).abs() > 0.001 {
             self.settings.zoom = zoom;
             self.save_settings();
+        }
+    }
+
+    fn track_window_size(&mut self, ctx: &egui::Context) {
+        let (rect, minimized) = ctx.input(|i| (i.viewport().inner_rect, i.viewport().minimized));
+        let Some(rect) = rect.filter(|r| minimized != Some(true) && r.width() > 100.0 && r.height() > 100.0) else {
+            return;
+        };
+        // points -> logical pixels, which is what the window is created with
+        let size = (rect.size() * ctx.zoom_factor()).round();
+        if (size.x - self.settings.window_size[0]).abs() < 1.0 && (size.y - self.settings.window_size[1]).abs() < 1.0 {
+            self.resized = None;
+            return;
+        }
+        match self.resized {
+            None => self.resized = Some(Instant::now()),
+            Some(t) if t.elapsed() > Duration::from_millis(500) => {
+                self.settings.window_size = [size.x, size.y];
+                self.save_settings();
+                self.resized = None;
+            }
+            Some(_) => ctx.request_repaint_after(Duration::from_millis(500)),
         }
     }
 
@@ -1092,6 +1164,15 @@ impl eframe::App for App {
                     .show(ctx, |ui| self.details(ui, &key, &mut actions));
             }
         }
+        egui::Window::new("Keyboard shortcuts")
+            .open(&mut self.show_shortcuts)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                // don't wrap: the window grows to the longest line
+                ui.add(egui::Label::new(RichText::new(SHORTCUTS).monospace()).wrap_mode(egui::TextWrapMode::Extend))
+            });
         egui::CentralPanel::default().show(ctx, |ui| match self.tab {
             Tab::Apps => self.apps(ui, &mut actions),
             Tab::Routing => self.routing(ui),
