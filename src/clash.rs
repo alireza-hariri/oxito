@@ -51,21 +51,26 @@ struct RawConn {
     rule: String,
 }
 
-/// Plain HTTP/1.0 GET; the controller is always local, so no client crate is needed.
-fn get(addr: &str, path: &str, secret: &str) -> Result<String, String> {
+/// Plain HTTP/1.0 request; the controller is always local, so no client crate is needed.
+fn request(method: &str, addr: &str, path: &str, secret: &str) -> Result<String, String> {
     let sock = addr.to_socket_addrs().map_err(|e| e.to_string())?.next().ok_or("bad api address")?;
     let mut s = TcpStream::connect_timeout(&sock, Duration::from_secs(2)).map_err(|e| e.to_string())?;
     s.set_read_timeout(Some(Duration::from_secs(3))).ok();
-    write!(s, "GET {path} HTTP/1.0\r\nHost: {addr}\r\nAuthorization: Bearer {secret}\r\n\r\n")
+    write!(s, "{method} {path} HTTP/1.0\r\nHost: {addr}\r\nAuthorization: Bearer {secret}\r\n\r\n")
         .map_err(|e| e.to_string())?;
     let mut buf = String::new();
     s.read_to_string(&mut buf).map_err(|e| e.to_string())?;
     let (head, body) = buf.split_once("\r\n\r\n").ok_or("malformed response")?;
     let status = head.lines().next().unwrap_or("");
-    if !status.contains(" 200") {
+    if !status.contains(" 200") && !status.contains(" 204") {
         return Err(format!("api: {status}"));
     }
     Ok(body.to_owned())
+}
+
+/// Close one connection, so the app reconnects and gets routed by the current rules.
+pub fn close(addr: &str, secret: &str, id: &str) -> Result<(), String> {
+    request("DELETE", addr, &format!("/connections/{id}"), secret).map(drop)
 }
 
 #[derive(Default)]
@@ -76,7 +81,7 @@ pub struct Tracker {
 
 impl Tracker {
     pub fn poll(&mut self, addr: &str, secret: &str) -> Result<Vec<Conn>, String> {
-        let body = get(addr, "/connections", secret)?;
+        let body = request("GET", addr, "/connections", secret)?;
         let resp: Resp = serde_json::from_str(&body).map_err(|e| e.to_string())?;
         let now = Instant::now();
         let dt = self.last.map(|l| (now - l).as_secs_f64()).unwrap_or(0.0);

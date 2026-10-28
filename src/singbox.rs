@@ -1,9 +1,12 @@
 //! Finding, (re)starting and reloading sing-box.
 //!
+//! Routing changes don't come through here: they go to the rule-set file, which sing-box reloads
+//! by itself. This is for the rest of the config.
+//!
 //! sing-box needs root for TUN, and only reloads on SIGHUP (the Clash API's PUT /configs is a
 //! no-op) — and that SIGHUP reload breaks with TUN. So "reset" starts sing-box under a tiny root
 //! shell supervisor, authorised once via sudo/pkexec. The supervisor listens on a user-owned FIFO
-//! for `reload` (a clean restart) / `stop`, restarts sing-box if it crashes, and so later changes
+//! for `reload` (a clean restart) / `stop`, restarts sing-box if it crashes, and so later reloads
 //! need no password.
 
 use std::fs::{self, OpenOptions};

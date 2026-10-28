@@ -1,6 +1,6 @@
 //! The egui front end: process list, per-app details, routing rules and sing-box control.
 
-use crate::clash::Conn;
+use crate::clash::{self, Conn};
 use crate::config::{Config, APP_KEY, DOMAIN_KEY};
 use crate::history::{self, Flow};
 use crate::monitor::{Monitor, Snapshot};
@@ -25,7 +25,7 @@ Alt+1 2 3        switch tabs
 Ctrl+R           reset sing-box
 Ctrl + / − / 0   zoom
 Double-click     route or unroute
-Right-click      more actions";
+Right-click      more actions / details";
 
 const GREEN: Color32 = Color32::from_rgb(80, 200, 120);
 const YELLOW: Color32 = Color32::from_rgb(230, 190, 70);
@@ -133,6 +133,7 @@ struct Row {
 
 enum Action {
     Select(String),
+    Details(String),
     Route(String),
     Unroute(String),
     Forget(String),
@@ -150,6 +151,8 @@ pub struct App {
     filter: String,
     mine_only: bool,
     selected: Option<String>,
+    /// Whether the details panel is shown for `selected`; only opened from the context menu.
+    details_open: bool,
     /// Read connection for the details panel (the monitor thread owns the writer).
     db: Option<rusqlite::Connection>,
     flows: (String, Option<Instant>, Vec<Flow>),
@@ -170,12 +173,18 @@ impl App {
         let mut messages = vec![];
         let mut cfg = Config::load(&paths.config).unwrap_or_else(|e| {
             messages.push((format!("{e}; starting from an empty config"), true));
-            Config { path: paths.config.clone(), data: serde_json::json!({}) }
+            Config::new(&paths.config, serde_json::json!({}))
         });
-        if cfg.setup() {
+        let migrated = cfg.setup();
+        if migrated {
             match cfg.save() {
-                Ok(()) => messages.push(("enabled clash_api and dns.reverse_mapping in config".into(), false)),
+                Ok(()) => messages.push(("set up clash_api, process lookup and the proxy2vpn rule-set in config".into(), false)),
                 Err(e) => messages.push((e, true)),
+            }
+        }
+        if migrated || !cfg.rules_path.exists() {
+            if let Err(e) = cfg.save_rules() {
+                messages.push((e, true));
             }
         }
         let settings: Settings =
@@ -194,6 +203,7 @@ impl App {
             filter: String::new(),
             mine_only: false,
             selected: None,
+            details_open: false,
             db: None,
             flows: (String::new(), None, vec![]),
             new_app: String::new(),
@@ -207,8 +217,13 @@ impl App {
         };
         cc.egui_ctx.set_zoom_factor(app.settings.zoom);
         app.save_settings();
-        if app.settings.reset_on_start && !app.ours_running(&singbox::find_all()) {
+        let instances = singbox::find_all();
+        if app.settings.reset_on_start && !app.ours_running(&instances) {
             app.reset();
+        } else if migrated && instances.iter().any(|i| app.uses_our_config(i)) {
+            // the running sing-box has the old config, without the rule-set
+            app.snap.instances = instances;
+            app.apply();
         }
         app
     }
@@ -306,11 +321,39 @@ impl App {
         if !changed {
             return self.msg(Ok(format!("{value}: nothing to change")));
         }
-        if let Err(e) = self.cfg.save() {
+        if let Err(e) = self.cfg.save_rules() {
             return self.msg(Err(e));
         }
-        self.msg(Ok(format!("{} {key}: {value}", if add { "+" } else { "−" })));
-        self.apply();
+        if !self.snap.instances.iter().any(|i| self.uses_our_config(i)) {
+            self.msg(Ok(format!("{} {key}: {value}", if add { "+" } else { "−" })));
+            return self.apply();
+        }
+        // sing-box picks up the rule-set by itself; only connections opened from now on follow
+        // it, so close the affected ones and let the app reconnect
+        let ids: Vec<String> = self
+            .snap
+            .conns
+            .iter()
+            .filter(|c| match key {
+                APP_KEY => c.app == value,
+                _ => c.host == value || c.host.ends_with(&format!(".{value}")),
+            })
+            .map(|c| c.id.clone())
+            .collect();
+        self.msg(Ok(format!(
+            "{} {key}: {value} (applied live, closing {} connection{})",
+            if add { "+" } else { "−" },
+            ids.len(),
+            if ids.len() == 1 { "" } else { "s" }
+        )));
+        let (addr, secret) = self.cfg.api();
+        std::thread::spawn(move || {
+            // give sing-box's file watcher a moment to reload the rule-set
+            std::thread::sleep(Duration::from_millis(300));
+            for id in ids {
+                let _ = clash::close(&addr, &secret, &id);
+            }
+        });
     }
 
     fn reload_config_from_disk(&mut self) {
@@ -672,6 +715,11 @@ impl App {
                         actions.push(if r.routed { Action::Unroute(r.exe.clone()) } else { Action::Route(r.exe.clone()) });
                     }
                     resp.context_menu(|ui| {
+                        if ui.button("More details").clicked() {
+                            actions.push(Action::Details(r.exe.clone()));
+                            ui.close_menu();
+                        }
+                        ui.separator();
                         if r.exe.is_empty() {
                             ui.label("sing-box couldn't identify the process — can't route");
                         } else if r.routed {
@@ -714,7 +762,11 @@ impl App {
             )
         });
         if esc {
-            self.selected = None;
+            if self.details_open {
+                self.details_open = false;
+            } else {
+                self.selected = None;
+            }
             return None;
         }
         if space {
@@ -744,7 +796,7 @@ impl App {
             ui.heading(name);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui.small_button("✖").clicked() {
-                    self.selected = None;
+                    self.details_open = false;
                 }
             });
         });
@@ -1033,7 +1085,7 @@ impl eframe::App for App {
             egui::TopBottomPanel::bottom("messages").resizable(true).show(ctx, |ui| self.messages_window(ui));
         }
         if self.tab == Tab::Apps {
-            if let Some(key) = self.selected.clone() {
+            if let Some(key) = self.selected.clone().filter(|_| self.details_open) {
                 egui::SidePanel::right("details")
                     .resizable(true)
                     .default_width(420.0)
@@ -1049,6 +1101,10 @@ impl eframe::App for App {
         for a in actions {
             match a {
                 Action::Select(k) => self.selected = Some(k),
+                Action::Details(k) => {
+                    self.selected = Some(k);
+                    self.details_open = true;
+                }
                 Action::Route(exe) => self.edit_rule(APP_KEY, &exe, true),
                 Action::Unroute(exe) => self.edit_rule(APP_KEY, &exe, false),
                 Action::Forget(exe) => self.forget(&exe),
