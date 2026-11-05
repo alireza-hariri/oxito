@@ -12,7 +12,7 @@ aarch64 | arm64) arch="aarch64"; sb_arch="arm64" ;;
 *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
-# download to stdout, preferring wget when available
+# download to stdout (API responses: no progress bar wanted)
 fetch() {
 	if command -v wget >/dev/null; then
 		wget -qO- "$1"
@@ -20,10 +20,10 @@ fetch() {
 		curl -fsSL "$1"
 	fi
 }
-# download to a file
+# download to a file, showing the progress bar
 get() {
 	if command -v wget >/dev/null; then
-		wget -qO "$2" "$1"
+		wget -O "$2" "$1"
 	else
 		curl -fSL -o "$2" "$1"
 	fi
