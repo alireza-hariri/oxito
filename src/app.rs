@@ -220,7 +220,7 @@ impl App {
             ind.set(inst.iter().any(|i| i.config.as_deref().is_some_and(|c| same_file(c, &config))));
         };
         let monitor =
-            Monitor::start(cc.egui_ctx.clone(), cfg.api(), db, settings.window_secs, Duration::from_secs(1), on_sample);
+            Monitor::start(cc.egui_ctx.clone(), cfg.api(), paths.config.clone(), db, settings.window_secs, Duration::from_secs(1), on_sample);
         let mut app = Self {
             paths,
             cfg,

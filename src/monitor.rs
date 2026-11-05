@@ -2,6 +2,7 @@
 //! and records connections into the history db.
 
 use crate::clash::{Conn, Tracker};
+use crate::config::Config;
 use crate::history::{self, AppHistory};
 use crate::procs::{Proc, Scanner};
 use crate::singbox::{self, Instance};
@@ -25,16 +26,24 @@ pub struct Snapshot {
 pub struct Monitor {
     /// Replaced whole each sample, so readers take a cheap Arc clone instead of copying it.
     pub snapshot: Arc<Mutex<Arc<Snapshot>>>,
-    /// (address, secret) of the Clash API; updated when the config changes.
+    /// (address, secret) of the Clash API; updated when the config changes or on a 401.
     pub api: Arc<Mutex<(String, String)>>,
     /// History older than this many seconds is deleted (0 = keep the whole session).
     pub retention: Arc<AtomicU64>,
+}
+
+fn poll(tracker: &mut Tracker, addr: &str, secret: &str) -> (Vec<Conn>, Option<String>) {
+    match tracker.poll(addr, secret) {
+        Ok(c) => (c, None),
+        Err(e) => (vec![], Some(format!("Clash API at {addr}: {e}"))),
+    }
 }
 
 impl Monitor {
     pub fn start(
         ctx: eframe::egui::Context,
         api: (String, String),
+        config: PathBuf,
         db: PathBuf,
         retention: u64,
         interval: Duration,
@@ -53,16 +62,24 @@ impl Monitor {
                 let mut procs = scanner.scan();
                 let instances = singbox::in_procs(&procs);
                 let (addr, secret) = api2.lock().unwrap().clone();
-                let (conns, api_error) = if addr.is_empty() {
+                let (mut conns, mut api_error) = if addr.is_empty() {
                     (vec![], Some("clash_api is not enabled in the config".into()))
                 } else if instances.is_empty() {
                     (vec![], Some("sing-box is not running".into()))
                 } else {
-                    match tracker.poll(&addr, &secret) {
-                        Ok(c) => (c, None),
-                        Err(e) => (vec![], Some(format!("Clash API at {addr}: {e}"))),
-                    }
+                    poll(&mut tracker, &addr, &secret)
                 };
+                // 401 means sing-box is running with a secret we don't know (e.g. the config was
+                // edited after it started); re-read the secret from the config and retry once.
+                if api_error.as_deref().is_some_and(|e| e.contains("401")) {
+                    if let Ok(cfg) = Config::load(&config) {
+                        let (a, s) = cfg.api();
+                        if !a.is_empty() && (a.as_str(), s.as_str()) != (addr.as_str(), secret.as_str()) {
+                            *api2.lock().unwrap() = (a.clone(), s.clone());
+                            (conns, api_error) = poll(&mut tracker, &a, &s);
+                        }
+                    }
+                }
                 if let Ok(con) = &con {
                     let secs = keep.load(Ordering::Relaxed);
                     if secs > 0 && pruned.elapsed() > Duration::from_secs(10) {
