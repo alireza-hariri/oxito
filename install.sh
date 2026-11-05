@@ -4,23 +4,34 @@
 set -e
 
 repo="alireza-hariri/oxito"
+sb_repo="SagerNet/sing-box"
 raw="https://raw.githubusercontent.com/$repo/main"
 case "$(uname -m)" in
-x86_64) arch="x86_64" ;;
-aarch64 | arm64) arch="aarch64" ;;
+x86_64) arch="x86_64"; sb_arch="amd64" ;;
+aarch64 | arm64) arch="aarch64"; sb_arch="arm64" ;;
 *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
 url=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" |
-	tr '\n' ' ' | grep -o "\"browser_download_url\": *\"[^\"]*oxito-linux-$arch\"" |
+	tr '\n' ' ' | grep -o "\"browser_download_url\": *\"[^\"]*oxito-linux-$arch.tar.xz\"" |
 	grep -o 'https://[^"]*')
 [ -n "$url" ] || { echo "no release binary for $arch; try install-git.sh" >&2; exit 1; }
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-curl -fSL -o "$tmp/oxito" "$url"
+curl -fSL -o "$tmp/oxito.tar.xz" "$url"
+tar xJf "$tmp/oxito.tar.xz" -C "$tmp"
 curl -fsSL -o "$tmp/oxito.svg" "$raw/assets/oxito.svg"
 curl -fsSL -o "$tmp/oxito.desktop" "$raw/assets/oxito.desktop"
+
+# Latest sing-box release, e.g. sing-box-1.11.5-linux-amd64.tar.gz
+sb_ver=$(curl -fsSL "https://api.github.com/repos/$sb_repo/releases/latest" | grep -o '"tag_name": *"[^"]*"' | grep -o 'v[^"]*')
+[ -n "$sb_ver" ] || { echo "could not determine latest sing-box version" >&2; exit 1; }
+sb_url="https://github.com/$sb_repo/releases/download/$sb_ver/sing-box-${sb_ver#v}-linux-$sb_arch.tar.gz"
+curl -fSL -o "$tmp/sing-box.tar.gz" "$sb_url"
+tar xzf "$tmp/sing-box.tar.gz" -C "$tmp"
+[ -f "$tmp/sing-box-linux-$sb_arch/sing-box" ] || { echo "unexpected sing-box archive layout" >&2; exit 1; }
+install -Dm755 "$tmp/sing-box-linux-$sb_arch/sing-box" "$HOME/.local/oxito/sing-box"
 
 data="${XDG_DATA_HOME:-$HOME/.local/share}"
 bin="$HOME/.local/bin/oxito"
@@ -30,4 +41,4 @@ sed "s|^Exec=.*|Exec=$bin|" "$tmp/oxito.desktop" > "$tmp/entry.desktop"
 install -Dm644 "$tmp/entry.desktop" "$data/applications/oxito.desktop"
 command -v update-desktop-database >/dev/null && update-desktop-database -q "$data/applications" || true
 command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -qtf "$data/icons/hicolor" || true
-echo "installed $bin"
+echo "installed $bin and $HOME/.local/oxito/sing-box ($sb_ver)"

@@ -80,7 +80,7 @@ fn instance(pid: u32, argv: &[String]) -> Option<Instance> {
     })
 }
 
-/// Best guess at the sing-box binary: a running one, the v2rayN bundle, or PATH.
+/// Best guess at the sing-box binary: a running one, the v2rayN bundle, our install location, or PATH.
 pub fn default_binary() -> String {
     if let Some(i) = find_all().into_iter().next() {
         return i.binary;
@@ -88,6 +88,10 @@ pub fn default_binary() -> String {
     let bundled = home().join(DEFAULT_BINARY);
     if bundled.exists() {
         return bundled.to_string_lossy().into_owned();
+    }
+    let local = home().join(".local/oxito/sing-box");
+    if local.exists() {
+        return local.to_string_lossy().into_owned();
     }
     "sing-box".into()
 }
