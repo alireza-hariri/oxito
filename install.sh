@@ -12,23 +12,40 @@ aarch64 | arm64) arch="aarch64"; sb_arch="arm64" ;;
 *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
-url=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" |
+# download to stdout, preferring wget when available
+fetch() {
+	if command -v wget >/dev/null; then
+		wget -qO- "$1"
+	else
+		curl -fsSL "$1"
+	fi
+}
+# download to a file
+get() {
+	if command -v wget >/dev/null; then
+		wget -qO "$2" "$1"
+	else
+		curl -fSL -o "$2" "$1"
+	fi
+}
+
+url=$(fetch "https://api.github.com/repos/$repo/releases/latest" |
 	tr '\n' ' ' | grep -o "\"browser_download_url\": *\"[^\"]*oxito-linux-$arch.tar.xz\"" |
 	grep -o 'https://[^"]*')
 [ -n "$url" ] || { echo "no release binary for $arch; try install-git.sh" >&2; exit 1; }
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-curl -fSL -o "$tmp/oxito.tar.xz" "$url"
+get "$url" "$tmp/oxito.tar.xz"
 tar xJf "$tmp/oxito.tar.xz" -C "$tmp"
-curl -fsSL -o "$tmp/oxito.svg" "$raw/assets/oxito.svg"
-curl -fsSL -o "$tmp/oxito.desktop" "$raw/assets/oxito.desktop"
+get "$raw/assets/oxito.svg" "$tmp/oxito.svg"
+get "$raw/assets/oxito.desktop" "$tmp/oxito.desktop"
 
 # Latest sing-box release, e.g. sing-box-1.11.5-linux-amd64.tar.gz
-sb_ver=$(curl -fsSL "https://api.github.com/repos/$sb_repo/releases/latest" | grep -o '"tag_name": *"[^"]*"' | grep -o 'v[^"]*')
+sb_ver=$(fetch "https://api.github.com/repos/$sb_repo/releases/latest" | grep -o '"tag_name": *"[^"]*"' | grep -o 'v[^"]*')
 [ -n "$sb_ver" ] || { echo "could not determine latest sing-box version" >&2; exit 1; }
 sb_url="https://github.com/$sb_repo/releases/download/$sb_ver/sing-box-${sb_ver#v}-linux-$sb_arch.tar.gz"
-curl -fSL -o "$tmp/sing-box.tar.gz" "$sb_url"
+get "$sb_url" "$tmp/sing-box.tar.gz"
 tar xzf "$tmp/sing-box.tar.gz" -C "$tmp"
 [ -f "$tmp/sing-box-linux-$sb_arch/sing-box" ] || { echo "unexpected sing-box archive layout" >&2; exit 1; }
 install -Dm755 "$tmp/sing-box-linux-$sb_arch/sing-box" "$HOME/.local/oxito/sing-box"
