@@ -1,5 +1,5 @@
 [package]
-name = "proxy2vpn"
+name = "oxito"
 version = "0.2.0"
 edition = "2021"
 description = "Pick running apps and route them through the VPN via sing-box process_path rules"

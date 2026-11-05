@@ -25,7 +25,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 DEFAULT_CONFIG = HERE / "sing-box-hf.json"
 DEFAULT_SINGBOX = Path.home() / "Application/v2rayN-linux-64/bin/sing_box/sing-box"
-STATE_DIR = Path.home() / ".local/state/proxy2vpn"
+STATE_DIR = Path.home() / ".local/state/oxito"
 DB_PATH = STATE_DIR / "history.db"
 API_ADDR = "127.0.0.1:9090"
 

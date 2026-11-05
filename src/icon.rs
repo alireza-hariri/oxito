@@ -1,11 +1,11 @@
-//! The app icon (`assets/proxy2vpn.svg`): green while sing-box runs this app's config, blue
+//! The app icon (`assets/oxito.svg`): green while sing-box runs this app's config, blue
 //! otherwise. Shown as the window icon and as a tray icon; the tray brings back a window hidden
 //! with Esc.
 
 use eframe::egui::{self, IconData, ViewportCommand};
 use std::sync::{Arc, Mutex};
 
-const SVG: &str = include_str!("../assets/proxy2vpn.svg");
+const SVG: &str = include_str!("../assets/oxito.svg");
 /// (blue as in the svg, green replacement): gradient top, gradient bottom / arrow.
 const RECOLOR: [(&str, &str); 2] = [("#4a90e2", "#3fbf74"), ("#2a5fae", "#23874c")];
 
@@ -49,11 +49,11 @@ impl Tray {
 
 impl ksni::Tray for Tray {
     fn id(&self) -> String {
-        "proxy2vpn".into()
+        "oxito".into()
     }
 
     fn title(&self) -> String {
-        "proxy2vpn".into()
+        "oxito".into()
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
@@ -72,7 +72,7 @@ impl ksni::Tray for Tray {
 
     fn tool_tip(&self) -> ksni::ToolTip {
         let description = if self.on { "sing-box running" } else { "sing-box not running" }.into();
-        ksni::ToolTip { title: "proxy2vpn".into(), description, ..Default::default() }
+        ksni::ToolTip { title: "oxito".into(), description, ..Default::default() }
     }
 
     fn activate(&mut self, _x: i32, _y: i32) {

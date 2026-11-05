@@ -1,0 +1,117 @@
+{
+  "log": {
+    "level": "warn",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "udp",
+        "tag": "dns-remote",
+        "server": "1.1.1.1"
+      },
+      {
+        "type": "udp",
+        "tag": "dns-direct",
+        "server": "1.1.1.1"
+      },
+      {
+        "type": "local",
+        "tag": "dns-local",
+        "detour": "direct"
+      }
+    ],
+    "rules": [
+      {
+        "domain_suffix": ".ir",
+        "server": "dns-direct"
+      },
+      {
+        "rule_set": [
+          "geoip-ir",
+          "geosite-ir"
+        ],
+        "server": "dns-direct"
+      }
+    ],
+    "final": "dns-remote",
+    "strategy": "ipv4_only",
+    "independent_cache": true
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "interface_name": "tun-hf",
+      "address": [
+        "198.18.0.1/30"
+      ],
+      "mtu": 1400,
+      "stack": "gvisor",
+      "auto_route": true
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "socks",
+      "tag": "xray-proxy",
+      "server": "127.0.0.1",
+      "server_port": 10808,
+      "version": "5"
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "action": "sniff"
+      },
+      {
+        "protocol": "dns",
+        "action": "hijack-dns"
+      },
+      {
+        "process_path": [
+          "/usr/lib/chromium/chromium",
+          "/home/alireza/.nvm/versions/node/v24.18.0/bin/node"
+        ],
+        "outbound": "xray-proxy"
+      },
+      {
+        "rule_set": [
+          "geoip-ir",
+          "geosite-ir"
+        ],
+        "outbound": "direct"
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "geoip-ir",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ir.srs",
+        "download_detour": "direct"
+      },
+      {
+        "type": "remote",
+        "tag": "geosite-ir",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ir.srs",
+        "download_detour": "direct"
+      }
+    ],
+    "final": "direct",
+    "auto_detect_interface": true,
+    "default_domain_resolver": "dns-remote"
+  },
+  "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:9090",
+      "secret": "7b3b16d2dc237dbc88f21d23cc44768e"
+    }
+  }
+}

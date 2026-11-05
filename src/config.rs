@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 pub const APP_KEY: &str = "process_path";
 pub const DOMAIN_KEY: &str = "domain_suffix";
-pub const RULE_SET_TAG: &str = "proxy2vpn";
+pub const RULE_SET_TAG: &str = "oxito";
 const DEFAULT_API: &str = "127.0.0.1:9090";
 
 pub struct Config {
@@ -262,7 +262,7 @@ mod tests {
     use super::*;
 
     fn cfg() -> Config {
-        Config::new(Path::new("/tmp/p2v/config.json"), serde_json::from_str(crate::EXAMPLE_CONFIG).unwrap())
+        Config::new(Path::new("/tmp/oxito/config.json"), serde_json::from_str(crate::EXAMPLE_CONFIG).unwrap())
     }
 
     #[test]
@@ -273,7 +273,7 @@ mod tests {
         let route = &c.data["route"];
         assert_eq!(route["rules"][2], json!({ "rule_set": RULE_SET_TAG, "outbound": "xray-proxy" }));
         assert!(route["rules"].as_array().unwrap().iter().all(|r| r.get(APP_KEY).is_none()));
-        assert_eq!(route["rule_set"][0]["path"], "/tmp/p2v/config.rules.json");
+        assert_eq!(route["rule_set"][0]["path"], "/tmp/oxito/config.rules.json");
         assert_eq!(route["find_process"], true);
         assert!(!c.setup());
     }

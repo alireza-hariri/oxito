@@ -14,16 +14,16 @@ Not on `PATH`. No systemd unit; it's run manually with `sudo` (needed for TUN).
 ## Running process
 
 ```
-sudo sing-box run -c /home/alireza/repos/proxy2vpn/sing-box-hf.json   # pid 7420
+sudo sing-box run -c /home/alireza/repos/oxito/sing-box-hf.json   # pid 7420
 ```
 
 ## Configs
 
-### `~/repos/proxy2vpn/sing-box-hf.json` (currently loaded)
+### `~/repos/oxito/sing-box-hf.json` (currently loaded)
 - TUN in (`tun-hf`, 198.18.0.1/30, gvisor stack), DNS → 192.168.0.1 (router), ipv4_only
 - Outbound `socks5` → 127.0.0.1:10808
 - Route rules: chromium & node → `xray-proxy`; everything else → direct
 
 ## Logs
 
-- `~/.local/state/proxy2vpn/sing-box.log` (~2200 lines, live process output)
+- `~/.local/state/oxito/sing-box.log` (~2200 lines, live process output)

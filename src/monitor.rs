@@ -58,6 +58,10 @@ impl Monitor {
             let mut tracker = Tracker::default();
             let mut con = history::open_fresh(&db);
             let mut pruned = Instant::now();
+            // Suppress transient API errors (e.g. sing-box's controller socket not yet
+            // open right after startup): only report after they persist across polls.
+            let mut api_fails: u32 = 0;
+            const API_FAIL_THRESHOLD: u32 = 3;
             loop {
                 let mut procs = scanner.scan();
                 let instances = singbox::in_procs(&procs);
@@ -67,7 +71,9 @@ impl Monitor {
                 } else if instances.is_empty() {
                     (vec![], Some("sing-box is not running".into()))
                 } else {
-                    poll(&mut tracker, &addr, &secret)
+                    let (c, e) = poll(&mut tracker, &addr, &secret);
+                    api_fails = if e.is_some() { api_fails.saturating_add(1) } else { 0 };
+                    (c, e.filter(|_| api_fails >= API_FAIL_THRESHOLD))
                 };
                 // 401 means sing-box is running with a secret we don't know (e.g. the config was
                 // edited after it started); re-read the secret from the config and retry once.
@@ -76,7 +82,10 @@ impl Monitor {
                         let (a, s) = cfg.api();
                         if !a.is_empty() && (a.as_str(), s.as_str()) != (addr.as_str(), secret.as_str()) {
                             *api2.lock().unwrap() = (a.clone(), s.clone());
-                            (conns, api_error) = poll(&mut tracker, &a, &s);
+                            let (c, e) = poll(&mut tracker, &a, &s);
+                            api_fails = if e.is_some() { api_fails.saturating_add(1) } else { 0 };
+                            conns = c;
+                            api_error = e.filter(|_| api_fails >= API_FAIL_THRESHOLD);
                         }
                     }
                 }

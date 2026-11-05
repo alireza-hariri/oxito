@@ -1,15 +1,15 @@
-# proxy2vpn
+# oxito
 
 A desktop app (Rust + egui) that shows running processes and what they're connecting to through
 sing-box. Pick any app and route it through the VPN with a sing-box `process_path` rule.
 
 ```
 cargo build --release
-./target/release/proxy2vpn            # or: proxy2vpn -c /path/to/config.json
+./target/release/oxito            # or: oxito -c /path/to/config.json
 ```
 
 `./install.sh` builds and installs it for your user: the binary to `~/.local/bin`, the icon and an
-app-menu entry (`proxy2vpn.desktop`) under `~/.local/share`. Re-run it after pulling changes.
+app-menu entry (`oxito.desktop`) under `~/.local/share`. Re-run it after pulling changes.
 
 ## What it does
 
@@ -25,7 +25,7 @@ app-menu entry (`proxy2vpn.desktop`) under `~/.local/share`. Re-run it after pul
     side panel (open connections, domains seen this session, running processes) with a
     **Route via VPN** / **Remove** button.
 - **VPN routes** tab: routed apps (`process_path`) and domains (`domain_suffix`); add or remove them.
-- **Icon** (`assets/proxy2vpn.svg`, also shown in the tray): green while sing-box runs this app's
+- **Icon** (`assets/oxito.svg`, also shown in the tray): green while sing-box runs this app's
   config, blue when it doesn't; updates live.
 - **Shift+Enter** starts or stops sing-box. **Esc** hides the window to the tray; click the tray icon
   (or its *Show* menu item) to bring it back. The window runs on X11/XWayland, since native
@@ -45,12 +45,12 @@ change does a Reset instead.
 | Path | Purpose |
 |---|---|
 | `example_config.json` | Seed config (TUN in, socks → xray, chromium/node via VPN). Also built into the binary. |
-| `~/.config/proxy2vpn/config.json` | The working config the app edits and sing-box runs. Created from the example on first launch. |
-| `~/.config/proxy2vpn/config.rules.json` | The routed apps and domains: a sing-box rule-set the config points at, reloaded by sing-box when it changes. |
-| `~/.config/proxy2vpn/settings.json` | sing-box binary path, reset options, zoom, window size (saved when you resize) |
-| `~/.local/state/proxy2vpn/history.db` | Session history (same schema as the old `p2v.py`). **Recreated empty at every launch** and pruned to the activity window every 10 s. |
-| `~/.local/state/proxy2vpn/` | also `sing-box.log`, pid files, `ctl` FIFO |
-| `archive/` | The previous Python CLI (`p2v.py`), its docs and the original configs |
+| `~/.config/oxito/config.json` | The working config the app edits and sing-box runs. Created from the example on first launch. |
+| `~/.config/oxito/config.rules.json` | The routed apps and domains: a sing-box rule-set the config points at, reloaded by sing-box when it changes. |
+| `~/.config/oxito/settings.json` | sing-box binary path, reset options, zoom, window size (saved when you resize) |
+| `~/.local/state/oxito/history.db` | Session history (same schema as the old `oxito.py`). **Recreated empty at every launch** and pruned to the activity window every 10 s. |
+| `~/.local/state/oxito/` | also `sing-box.log`, pid files, `ctl` FIFO |
+| `archive/` | The previous Python CLI (`oxito.py`), its docs and the original configs |
 
 ## Reset and reload
 
@@ -65,7 +65,7 @@ fails with `TUNSETIFF: device or resource busy`, and the process dies. The Clash
 1. stops the running sing-box instances: all of them by default, or only those using this config
    if you turn off the option;
 2. starts sing-box with the app's config under a small root shell supervisor;
-3. the supervisor listens on a user-owned FIFO (`~/.local/state/proxy2vpn/ctl`):
+3. the supervisor listens on a user-owned FIFO (`~/.local/state/oxito/ctl`):
    - `reload`: stop sing-box, wait until it has fully exited, start it again;
    - `stop`: stop sing-box and exit.
 
@@ -94,6 +94,6 @@ with this config. You can turn that off in the sing-box tab.
 On first launch the app turns on `experimental.clash_api` (with a random secret) and
 `dns.reverse_mapping` in the config, because the connection view needs them. It also sets
 `route.find_process` (sing-box only decides at startup whether to look up processes, and the
-rule-set may start empty), adds the `proxy2vpn` rule-set with a rule sending it to the VPN outbound,
+rule-set may start empty), adds the `oxito` rule-set with a rule sending it to the VPN outbound,
 and moves any old in-config `process_path` / `domain_suffix` VPN rules into the rule-set. If a
 sing-box with the old config is running, it is restarted once to pick that up.

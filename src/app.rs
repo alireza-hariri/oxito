@@ -201,7 +201,7 @@ impl App {
         let migrated = cfg.setup();
         if migrated {
             match cfg.save() {
-                Ok(()) => messages.push(("set up clash_api, process lookup and the proxy2vpn rule-set in config".into(), false)),
+                Ok(()) => messages.push(("set up clash_api, process lookup and the oxito rule-set in config".into(), false)),
                 Err(e) => messages.push((e, true)),
             }
         }
@@ -509,7 +509,7 @@ impl App {
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.heading("proxy2vpn");
+            ui.heading("oxito");
             ui.separator();
             ui.selectable_value(&mut self.tab, Tab::Apps, "Apps");
             let n = self.cfg.items(APP_KEY).len() + self.cfg.items(DOMAIN_KEY).len();
@@ -1001,7 +1001,7 @@ impl App {
             ui.end_row();
             ui.label("Options");
             ui.vertical(|ui| {
-                if ui.checkbox(&mut self.settings.reset_on_start, "Reset sing-box when proxy2vpn starts").changed() {
+                if ui.checkbox(&mut self.settings.reset_on_start, "Reset sing-box when oxito starts").changed() {
                     self.save_settings();
                 }
                 if ui

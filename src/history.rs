@@ -1,4 +1,4 @@
-//! SQLite history of what each app connected to through sing-box (same schema as the old p2v.py).
+//! SQLite history of what each app connected to through sing-box (same schema as the old oxito.py).
 //! It only covers the current session: recreated at startup and pruned to the activity window.
 
 use crate::clash::Conn;
@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn record_counts_once_and_prunes() {
-        let path = std::env::temp_dir().join(format!("p2v-test-{}.db", std::process::id()));
+        let path = std::env::temp_dir().join(format!("oxito-test-{}.db", std::process::id()));
         let mut con = open_fresh(&path).unwrap();
         record(&mut con, &[conn("1", "/usr/bin/a", "x.com", 10, true)]).unwrap();
         record(&mut con, &[conn("1", "/usr/bin/a", "x.com", 10, false)]).unwrap();

@@ -1,4 +1,4 @@
-//! proxy2vpn - see running apps and their traffic through sing-box, and pick which ones go via the VPN.
+//! oxito - see running apps and their traffic through sing-box, and pick which ones go via the VPN.
 
 mod app;
 mod clash;
@@ -23,14 +23,14 @@ pub struct Paths {
 fn paths() -> Result<Paths, String> {
     let home = singbox::home();
     let conf_dir = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or(home.join(".config"));
-    let conf_dir = conf_dir.join("proxy2vpn");
+    let conf_dir = conf_dir.join("oxito");
     let mut config = conf_dir.join("config.json");
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "-c" | "--config" => config = args.next().ok_or("--config needs a path")?.into(),
             "-h" | "--help" => {
-                println!("usage: proxy2vpn [-c CONFIG]\n\nCONFIG defaults to {}", config.display());
+                println!("usage: oxito [-c CONFIG]\n\nCONFIG defaults to {}", config.display());
                 std::process::exit(0);
             }
             _ => return Err(format!("unknown argument: {a}")),
@@ -44,7 +44,7 @@ fn paths() -> Result<Paths, String> {
     Ok(Paths {
         config,
         settings: conf_dir.join("settings.json"),
-        state: home.join(".local/state/proxy2vpn"),
+        state: home.join(".local/state/oxito"),
     })
 }
 
@@ -58,8 +58,8 @@ fn main() -> eframe::Result {
     };
     let opts = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("proxy2vpn")
-            .with_app_id("proxy2vpn")
+            .with_title("oxito")
+            .with_app_id("oxito")
             .with_inner_size(app::saved_window_size(&paths))
             .with_icon(icon::icon_data(false)),
         // X11 (XWayland on Wayland): native Wayland can't hide the window to the tray or bring it
@@ -70,5 +70,5 @@ fn main() -> eframe::Result {
         })),
         ..Default::default()
     };
-    eframe::run_native("proxy2vpn", opts, Box::new(|cc| Ok(Box::new(app::App::new(cc, paths)))))
+    eframe::run_native("oxito", opts, Box::new(|cc| Ok(Box::new(app::App::new(cc, paths)))))
 }

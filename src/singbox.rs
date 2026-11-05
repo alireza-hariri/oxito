@@ -134,7 +134,7 @@ setsid -f /bin/sh -c '
   echo $$ > "$dir/supervisor.pid"
   echo SUPERVISOR_VERSION > "$dir/supervisor.version"
   exec 3<>"$dir/ctl"
-  log() { echo "--- $(date "+%F %T") proxy2vpn: $*" >>"$dir/sing-box.log"; }
+  log() { echo "--- $(date "+%F %T") oxito: $*" >>"$dir/sing-box.log"; }
   # kill -0 succeeds on an unreaped zombie, so look at the process state instead
   alive() { [ -r /proc/$1/stat ] && [ "$(sed "s/.*) //; s/ .*//" /proc/$1/stat 2>/dev/null)" != Z ]; }
   start() {
@@ -171,7 +171,7 @@ setsid -f /bin/sh -c '
   if [ "$(cat "$dir/sing-box.pid" 2>/dev/null)" = "$sb" ]; then
     rm -f "$dir/ctl" "$dir/sing-box.pid" "$dir/supervisor.pid" "$dir/supervisor.version"
   fi
-' p2v-supervisor "$bin" "$cfg" "$dir" </dev/null >/dev/null 2>&1
+' oxito-supervisor "$bin" "$cfg" "$dir" </dev/null >/dev/null 2>&1
 "#;
 
 /// Run a command as root: directly if we are root, via cached sudo if possible, else pkexec.
@@ -213,7 +213,7 @@ pub fn reset(binary: &str, config: &Path, state: &Path, kill: &[u32]) -> Result<
     // SAFETY: getuid has no preconditions
     let uid = unsafe { libc::getuid() }.to_string();
     let pids: Vec<String> = kill.iter().map(u32::to_string).collect();
-    let mut args = vec!["/bin/sh", "-c", SUPERVISOR, "p2v-reset"];
+    let mut args = vec!["/bin/sh", "-c", SUPERVISOR, "oxito-reset"];
     let (b, c, s) = (binary.to_string_lossy(), config.to_string_lossy(), state.to_string_lossy());
     args.extend([b.as_ref(), c.as_ref(), s.as_ref(), uid.as_str()]);
     args.extend(pids.iter().map(String::as_str));
@@ -232,7 +232,7 @@ pub fn reset(binary: &str, config: &Path, state: &Path, kill: &[u32]) -> Result<
 
 /// Restart our supervised sing-box so it picks up the config, and wait until it's back up.
 pub fn reload(state: &Path) -> Result<String, String> {
-    let old = managed_pid(state).ok_or("sing-box was not started by proxy2vpn")?;
+    let old = managed_pid(state).ok_or("sing-box was not started by oxito")?;
     send_ctl(state, "reload").map_err(|e| format!("supervisor unreachable: {e}"))?;
     for _ in 0..80 {
         std::thread::sleep(std::time::Duration::from_millis(100));
