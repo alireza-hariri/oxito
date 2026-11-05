@@ -27,7 +27,9 @@ pub struct Instance {
 
 /// All running `sing-box run` processes (sudo/pkexec wrappers excluded).
 pub fn find_all() -> Vec<Instance> {
-    let Ok(dir) = fs::read_dir("/proc") else { return vec![] };
+    let Ok(dir) = fs::read_dir("/proc") else {
+        return vec![];
+    };
     dir.flatten()
         .filter_map(|e| {
             let pid = e.file_name().to_str()?.parse::<u32>().ok()?;
@@ -44,7 +46,10 @@ pub fn find_all() -> Vec<Instance> {
 
 /// The sing-box instances among already-scanned processes.
 pub fn in_procs(procs: &[Proc]) -> Vec<Instance> {
-    procs.iter().filter_map(|p| instance(p.pid, &p.args)).collect()
+    procs
+        .iter()
+        .filter_map(|p| instance(p.pid, &p.args))
+        .collect()
 }
 
 fn instance(pid: u32, argv: &[String]) -> Option<Instance> {
@@ -55,15 +60,24 @@ fn instance(pid: u32, argv: &[String]) -> Option<Instance> {
     if matches!(comm.trim(), "sudo" | "pkexec" | "doas") {
         return None;
     }
-    let config = argv.windows(2).find(|w| w[0] == "-c" || w[0] == "--config").map(|w| {
-        let p = PathBuf::from(&w[1]);
-        if p.is_absolute() {
-            p
-        } else {
-            fs::read_link(format!("/proc/{pid}/cwd")).map(|cwd| cwd.join(&p)).unwrap_or(p)
-        }
-    });
-    Some(Instance { pid, binary: argv[0].clone(), config })
+    let config = argv
+        .windows(2)
+        .find(|w| w[0] == "-c" || w[0] == "--config")
+        .map(|w| {
+            let p = PathBuf::from(&w[1]);
+            if p.is_absolute() {
+                p
+            } else {
+                fs::read_link(format!("/proc/{pid}/cwd"))
+                    .map(|cwd| cwd.join(&p))
+                    .unwrap_or(p)
+            }
+        });
+    Some(Instance {
+        pid,
+        binary: argv[0].clone(),
+        config,
+    })
 }
 
 /// Best guess at the sing-box binary: a running one, the v2rayN bundle, or PATH.
@@ -79,7 +93,9 @@ pub fn default_binary() -> String {
 }
 
 pub fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| "/root".into())
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/root".into())
 }
 
 pub fn check(binary: &str, config: &Path) -> Result<(), String> {
@@ -91,7 +107,11 @@ pub fn check(binary: &str, config: &Path) -> Result<(), String> {
     if out.status.success() {
         Ok(())
     } else {
-        let msg = String::from_utf8_lossy(if out.stderr.is_empty() { &out.stdout } else { &out.stderr });
+        let msg = String::from_utf8_lossy(if out.stderr.is_empty() {
+            &out.stdout
+        } else {
+            &out.stderr
+        });
         Err(format!("sing-box check failed:\n{}", msg.trim()))
     }
 }
@@ -101,16 +121,27 @@ const SUPERVISOR_VERSION: &str = "2";
 
 /// pid of the sing-box our (current) supervisor runs, if it is alive.
 pub fn managed_pid(state: &Path) -> Option<u32> {
-    if fs::read_to_string(state.join("supervisor.version")).ok()?.trim() != SUPERVISOR_VERSION {
+    if fs::read_to_string(state.join("supervisor.version"))
+        .ok()?
+        .trim()
+        != SUPERVISOR_VERSION
+    {
         return None;
     }
-    let pid: u32 = fs::read_to_string(state.join("sing-box.pid")).ok()?.trim().parse().ok()?;
+    let pid: u32 = fs::read_to_string(state.join("sing-box.pid"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
     Path::new(&format!("/proc/{pid}")).exists().then_some(pid)
 }
 
 fn send_ctl(state: &Path, cmd: &str) -> std::io::Result<()> {
     // non-blocking so a FIFO with no supervisor behind it fails (ENXIO) instead of hanging
-    let mut f = OpenOptions::new().write(true).custom_flags(libc::O_NONBLOCK).open(state.join("ctl"))?;
+    let mut f = OpenOptions::new()
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(state.join("ctl"))?;
     f.write_all(format!("{cmd}\n").as_bytes())
 }
 
@@ -181,7 +212,11 @@ fn run_root(args: &[&str]) -> Result<(), String> {
         let mut c = Command::new(args[0]);
         c.args(&args[1..]);
         c
-    } else if Command::new("sudo").args(["-n", "true"]).output().is_ok_and(|o| o.status.success()) {
+    } else if Command::new("sudo")
+        .args(["-n", "true"])
+        .output()
+        .is_ok_and(|o| o.status.success())
+    {
         let mut c = Command::new("sudo");
         c.arg("-n").args(args);
         c
@@ -214,7 +249,11 @@ pub fn reset(binary: &str, config: &Path, state: &Path, kill: &[u32]) -> Result<
     let uid = unsafe { libc::getuid() }.to_string();
     let pids: Vec<String> = kill.iter().map(u32::to_string).collect();
     let mut args = vec!["/bin/sh", "-c", SUPERVISOR, "oxito-reset"];
-    let (b, c, s) = (binary.to_string_lossy(), config.to_string_lossy(), state.to_string_lossy());
+    let (b, c, s) = (
+        binary.to_string_lossy(),
+        config.to_string_lossy(),
+        state.to_string_lossy(),
+    );
     args.extend([b.as_ref(), c.as_ref(), s.as_ref(), uid.as_str()]);
     args.extend(pids.iter().map(String::as_str));
     let script = SUPERVISOR.replace("SUPERVISOR_VERSION", SUPERVISOR_VERSION);
@@ -227,7 +266,10 @@ pub fn reset(binary: &str, config: &Path, state: &Path, kill: &[u32]) -> Result<
             return Ok(());
         }
     }
-    Err(format!("sing-box did not start; see {}", state.join("sing-box.log").display()))
+    Err(format!(
+        "sing-box did not start; see {}",
+        state.join("sing-box.log").display()
+    ))
 }
 
 /// Restart our supervised sing-box so it picks up the config, and wait until it's back up.
@@ -240,16 +282,25 @@ pub fn reload(state: &Path) -> Result<String, String> {
             // a bad config makes sing-box exit right away; give it a moment to prove itself
             std::thread::sleep(std::time::Duration::from_millis(700));
             if Path::new(&format!("/proc/{pid}")).exists() {
-                return Ok(format!("sing-box restarted with the new config (pid {pid})"));
+                return Ok(format!(
+                    "sing-box restarted with the new config (pid {pid})"
+                ));
             }
         }
     }
-    Err(format!("sing-box did not come back up; see {}", state.join("sing-box.log").display()))
+    Err(format!(
+        "sing-box did not come back up; see {}",
+        state.join("sing-box.log").display()
+    ))
 }
 
 pub fn stop(state: &Path, pids: &[u32]) -> Result<(), String> {
     let managed = managed_pid(state).filter(|_| send_ctl(state, "stop").is_ok());
-    let rest: Vec<String> = pids.iter().filter(|&&p| Some(p) != managed).map(u32::to_string).collect();
+    let rest: Vec<String> = pids
+        .iter()
+        .filter(|&&p| Some(p) != managed)
+        .map(u32::to_string)
+        .collect();
     if rest.is_empty() {
         return Ok(());
     }
@@ -259,5 +310,9 @@ pub fn stop(state: &Path, pids: &[u32]) -> Result<(), String> {
 }
 
 fn which(name: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH")?.to_str()?.split(':').map(|d| Path::new(d).join(name)).find(|p| p.is_file())
+    std::env::var_os("PATH")?
+        .to_str()?
+        .split(':')
+        .map(|d| Path::new(d).join(name))
+        .find(|p| p.is_file())
 }

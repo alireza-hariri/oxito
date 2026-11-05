@@ -1,6 +1,7 @@
 //! oxito - see running apps and their traffic through sing-box, and pick which ones go via the VPN.
 
 mod app;
+mod appicon;
 mod clash;
 mod config;
 mod history;
@@ -22,7 +23,9 @@ pub struct Paths {
 
 fn paths() -> Result<Paths, String> {
     let home = singbox::home();
-    let conf_dir = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or(home.join(".config"));
+    let conf_dir = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or(home.join(".config"));
     let conf_dir = conf_dir.join("oxito");
     let mut config = conf_dir.join("config.json");
     let mut args = std::env::args().skip(1);
@@ -30,7 +33,10 @@ fn paths() -> Result<Paths, String> {
         match a.as_str() {
             "-c" | "--config" => config = args.next().ok_or("--config needs a path")?.into(),
             "-h" | "--help" => {
-                println!("usage: oxito [-c CONFIG]\n\nCONFIG defaults to {}", config.display());
+                println!(
+                    "usage: oxito [-c CONFIG]\n\nCONFIG defaults to {}",
+                    config.display()
+                );
                 std::process::exit(0);
             }
             _ => return Err(format!("unknown argument: {a}")),
@@ -39,7 +45,8 @@ fn paths() -> Result<Paths, String> {
     if !config.exists() {
         // first run: seed the working config from the bundled example
         fs::create_dir_all(config.parent().unwrap()).map_err(|e| e.to_string())?;
-        fs::write(&config, EXAMPLE_CONFIG).map_err(|e| format!("write {}: {e}", config.display()))?;
+        fs::write(&config, EXAMPLE_CONFIG)
+            .map_err(|e| format!("write {}: {e}", config.display()))?;
     }
     Ok(Paths {
         config,
@@ -70,5 +77,9 @@ fn main() -> eframe::Result {
         })),
         ..Default::default()
     };
-    eframe::run_native("oxito", opts, Box::new(|cc| Ok(Box::new(app::App::new(cc, paths)))))
+    eframe::run_native(
+        "oxito",
+        opts,
+        Box::new(|cc| Ok(Box::new(app::App::new(cc, paths)))),
+    )
 }

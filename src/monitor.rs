@@ -10,8 +10,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 use std::time::Duration;
+use std::time::Instant;
 
 #[derive(Default, Clone)]
 pub struct Snapshot {
@@ -67,12 +67,19 @@ impl Monitor {
                 let instances = singbox::in_procs(&procs);
                 let (addr, secret) = api2.lock().unwrap().clone();
                 let (mut conns, mut api_error) = if addr.is_empty() {
-                    (vec![], Some("clash_api is not enabled in the config".into()))
+                    (
+                        vec![],
+                        Some("clash_api is not enabled in the config".into()),
+                    )
                 } else if instances.is_empty() {
                     (vec![], Some("sing-box is not running".into()))
                 } else {
                     let (c, e) = poll(&mut tracker, &addr, &secret);
-                    api_fails = if e.is_some() { api_fails.saturating_add(1) } else { 0 };
+                    api_fails = if e.is_some() {
+                        api_fails.saturating_add(1)
+                    } else {
+                        0
+                    };
                     (c, e.filter(|_| api_fails >= API_FAIL_THRESHOLD))
                 };
                 // 401 means sing-box is running with a secret we don't know (e.g. the config was
@@ -80,10 +87,16 @@ impl Monitor {
                 if api_error.as_deref().is_some_and(|e| e.contains("401")) {
                     if let Ok(cfg) = Config::load(&config) {
                         let (a, s) = cfg.api();
-                        if !a.is_empty() && (a.as_str(), s.as_str()) != (addr.as_str(), secret.as_str()) {
+                        if !a.is_empty()
+                            && (a.as_str(), s.as_str()) != (addr.as_str(), secret.as_str())
+                        {
                             *api2.lock().unwrap() = (a.clone(), s.clone());
                             let (c, e) = poll(&mut tracker, &a, &s);
-                            api_fails = if e.is_some() { api_fails.saturating_add(1) } else { 0 };
+                            api_fails = if e.is_some() {
+                                api_fails.saturating_add(1)
+                            } else {
+                                0
+                            };
                             conns = c;
                             api_error = e.filter(|_| api_fails >= API_FAIL_THRESHOLD);
                         }
@@ -97,23 +110,39 @@ impl Monitor {
                     }
                 }
                 let (history, db_error) = match &mut con {
-                    Ok(con) => match history::record(con, &conns).and_then(|_| history::apps(con)) {
-                        Ok(h) => (h, None),
-                        Err(e) => (vec![], Some(format!("history db: {e}"))),
-                    },
+                    Ok(con) => {
+                        match history::record(con, &conns).and_then(|_| history::apps(con)) {
+                            Ok(h) => (h, None),
+                            Err(e) => (vec![], Some(format!("history db: {e}"))),
+                        }
+                    }
                     Err(e) => (vec![], Some(format!("history db {}: {e}", db.display()))),
                 };
                 // CPU / memory only for the apps the list shows
-                let shown: HashSet<&str> =
-                    history.iter().map(|h| h.app.as_str()).chain(conns.iter().map(|c| c.app.as_str())).collect();
+                let shown: HashSet<&str> = history
+                    .iter()
+                    .map(|h| h.app.as_str())
+                    .chain(conns.iter().map(|c| c.app.as_str()))
+                    .collect();
                 scanner.usage(&mut procs, |p| shown.contains(p.exe.as_str()));
                 on_sample(&instances);
-                let s = Snapshot { procs, conns, api_error, instances, history, db_error };
+                let s = Snapshot {
+                    procs,
+                    conns,
+                    api_error,
+                    instances,
+                    history,
+                    db_error,
+                };
                 *snap.lock().unwrap() = Arc::new(s);
                 ctx.request_repaint();
                 std::thread::sleep(interval);
             }
         });
-        Self { snapshot, api, retention }
+        Self {
+            snapshot,
+            api,
+            retention,
+        }
     }
 }

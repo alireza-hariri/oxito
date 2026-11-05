@@ -1,5 +1,6 @@
 //! The egui front end: process list, per-app details, routing rules and sing-box control.
 
+use crate::appicon;
 use crate::clash::{self, Conn};
 use crate::config::{Config, APP_KEY, DOMAIN_KEY};
 use crate::history::{self, Flow};
@@ -53,7 +54,12 @@ struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { singbox: singbox::default_binary(), reset_on_start: true, stop_others: true, window_secs: 300, zoom: 1.25,
+        Self {
+            singbox: singbox::default_binary(),
+            reset_on_start: true,
+            stop_others: true,
+            window_secs: 300,
+            zoom: 1.25,
             window_size: [960.0, 720.0],
         }
     }
@@ -61,7 +67,10 @@ impl Default for Settings {
 
 impl Settings {
     fn load(path: &Path) -> Self {
-        fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+        fs::read_to_string(path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
     }
 }
 
@@ -78,8 +87,14 @@ enum Tab {
 }
 
 /// Activity windows offered for the app list, in seconds (0 = everything in history).
-const WINDOWS: [(u64, &str); 6] =
-    [(60, "1 min"), (300, "5 min"), (900, "15 min"), (3600, "1 hour"), (86400, "24 hours"), (0, "since start")];
+const WINDOWS: [(u64, &str); 6] = [
+    (60, "1 min"),
+    (300, "5 min"),
+    (900, "15 min"),
+    (3600, "1 hour"),
+    (86400, "24 hours"),
+    (0, "since start"),
+];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum SortKey {
@@ -174,6 +189,8 @@ pub struct App {
     details_open: bool,
     /// Read connection for the details panel (the monitor thread owns the writer).
     db: Option<rusqlite::Connection>,
+    /// Per-app icons for the table, decoded lazily on first display.
+    icons: appicon::Icons,
     flows: (String, Option<Instant>, Vec<Flow>),
     new_app: String,
     new_domain: String,
@@ -201,7 +218,10 @@ impl App {
         let migrated = cfg.setup();
         if migrated {
             match cfg.save() {
-                Ok(()) => messages.push(("set up clash_api, process lookup and the oxito rule-set in config".into(), false)),
+                Ok(()) => messages.push((
+                    "set up clash_api, process lookup and the oxito rule-set in config".into(),
+                    false,
+                )),
                 Err(e) => messages.push((e, true)),
             }
         }
@@ -217,10 +237,20 @@ impl App {
         // the monitor thread keeps the icon current, even while the window is hidden and not redrawn
         let (ind, config) = (indicator.clone(), paths.config.clone());
         let on_sample = move |inst: &[Instance]| {
-            ind.set(inst.iter().any(|i| i.config.as_deref().is_some_and(|c| same_file(c, &config))));
+            ind.set(
+                inst.iter()
+                    .any(|i| i.config.as_deref().is_some_and(|c| same_file(c, &config))),
+            );
         };
-        let monitor =
-            Monitor::start(cc.egui_ctx.clone(), cfg.api(), paths.config.clone(), db, settings.window_secs, Duration::from_secs(1), on_sample);
+        let monitor = Monitor::start(
+            cc.egui_ctx.clone(),
+            cfg.api(),
+            paths.config.clone(),
+            db,
+            settings.window_secs,
+            Duration::from_secs(1),
+            on_sample,
+        );
         let mut app = Self {
             paths,
             cfg,
@@ -234,6 +264,7 @@ impl App {
             mine_only: false,
             selected: None,
             details_open: false,
+            icons: appicon::Icons::default(),
             db: None,
             flows: (String::new(), None, vec![]),
             new_app: String::new(),
@@ -282,13 +313,18 @@ impl App {
     }
 
     fn uses_our_config(&self, inst: &Instance) -> bool {
-        inst.config.as_deref().is_some_and(|c| same_file(c, &self.paths.config))
+        inst.config
+            .as_deref()
+            .is_some_and(|c| same_file(c, &self.paths.config))
     }
 
     /// Our supervised sing-box is up and running this app's config.
     fn ours_running(&self, instances: &[Instance]) -> bool {
-        singbox::managed_pid(&self.paths.state)
-            .is_some_and(|pid| instances.iter().any(|i| i.pid == pid && self.uses_our_config(i)))
+        singbox::managed_pid(&self.paths.state).is_some_and(|pid| {
+            instances
+                .iter()
+                .any(|i| i.pid == pid && self.uses_our_config(i))
+        })
     }
 
     fn spawn(&mut self, label: &str, f: impl FnOnce() -> Result<String, String> + Send + 'static) {
@@ -310,28 +346,43 @@ impl App {
             .filter(|i| self.settings.stop_others || self.uses_our_config(i))
             .map(|i| i.pid)
             .collect();
-        let (bin, cfg, state) = (self.settings.singbox.clone(), self.paths.config.clone(), self.paths.state.clone());
-        self.spawn("Resetting sing-box (authorise in the prompt)…", move || {
-            singbox::reset(&bin, &cfg, &state, &kill)?;
-            Ok(format!("sing-box restarted with {}", cfg.display()))
-        });
+        let (bin, cfg, state) = (
+            self.settings.singbox.clone(),
+            self.paths.config.clone(),
+            self.paths.state.clone(),
+        );
+        self.spawn(
+            "Resetting sing-box (authorise in the prompt)…",
+            move || {
+                singbox::reset(&bin, &cfg, &state, &kill)?;
+                Ok(format!("sing-box restarted with {}", cfg.display()))
+            },
+        );
     }
 
     fn stop(&mut self) {
         let pids: Vec<u32> = self.snap.instances.iter().map(|i| i.pid).collect();
         let state = self.paths.state.clone();
-        self.spawn("Stopping sing-box…", move || singbox::stop(&state, &pids).map(|_| "sing-box stopped".into()));
+        self.spawn("Stopping sing-box…", move || {
+            singbox::stop(&state, &pids).map(|_| "sing-box stopped".into())
+        });
     }
 
     fn check(&mut self) {
         let (bin, cfg) = (self.settings.singbox.clone(), self.paths.config.clone());
-        self.spawn("Checking config…", move || singbox::check(&bin, &cfg).map(|_| "config OK".into()));
+        self.spawn("Checking config…", move || {
+            singbox::check(&bin, &cfg).map(|_| "config OK".into())
+        });
     }
 
     /// Validate the saved config and get sing-box running with it.
     fn apply(&mut self) {
         if self.ours_running(&self.snap.instances) {
-            let (bin, cfg, state) = (self.settings.singbox.clone(), self.paths.config.clone(), self.paths.state.clone());
+            let (bin, cfg, state) = (
+                self.settings.singbox.clone(),
+                self.paths.config.clone(),
+                self.paths.state.clone(),
+            );
             self.spawn("Restarting sing-box…", move || {
                 singbox::check(&bin, &cfg)?;
                 singbox::reload(&state)
@@ -358,7 +409,10 @@ impl App {
             return self.msg(Err(e));
         }
         if !self.snap.instances.iter().any(|i| self.uses_our_config(i)) {
-            self.msg(Ok(format!("{} {key}: {value}", if add { "+" } else { "−" })));
+            self.msg(Ok(format!(
+                "{} {key}: {value}",
+                if add { "+" } else { "−" }
+            )));
             return self.apply();
         }
         // sing-box picks up the rule-set by itself; only connections opened from now on follow
@@ -404,9 +458,11 @@ impl App {
         if self.db.is_none() {
             self.db = history::open(&self.paths.state.join("history.db")).ok();
         }
-        let res = self.db.as_ref().ok_or("history db unavailable".to_string()).and_then(|db| {
-            history::forget(db, exe).map_err(|e| e.to_string())
-        });
+        let res = self
+            .db
+            .as_ref()
+            .ok_or("history db unavailable".to_string())
+            .and_then(|db| history::forget(db, exe).map_err(|e| e.to_string()));
         self.flows.1 = None;
         self.msg(res.map(|_| format!("forgot history of {exe}")));
     }
@@ -422,7 +478,11 @@ impl App {
             *index.entry(exe.to_owned()).or_insert_with(|| {
                 rows.push(Row {
                     exe: exe.to_owned(),
-                    name: if exe.is_empty() { "(unknown process)".into() } else { file_name(exe) },
+                    name: if exe.is_empty() {
+                        "(unknown process)".into()
+                    } else {
+                        file_name(exe)
+                    },
                     pids: vec![],
                     user: String::new(),
                     cpu: 0.0,
@@ -448,7 +508,12 @@ impl App {
             r.domains = h.domains;
             r.traffic = h.up + h.down;
             r.last_seen = h.last_seen;
-            r.outbounds.extend(h.outbounds.split(',').filter(|o| !o.is_empty()).map(str::to_owned));
+            r.outbounds.extend(
+                h.outbounds
+                    .split(',')
+                    .filter(|o| !o.is_empty())
+                    .map(str::to_owned),
+            );
         }
         let now = history::now();
         for c in self.snap.conns.iter().filter(|c| c.port != 53) {
@@ -480,7 +545,9 @@ impl App {
         rows.retain(|r| {
             (window == 0.0 || r.live > 0 || now - r.last_seen <= window)
                 && (!self.mine_only || r.user == me)
-                && (f.is_empty() || r.name.to_lowercase().contains(&f) || r.exe.to_lowercase().contains(&f))
+                && (f.is_empty()
+                    || r.name.to_lowercase().contains(&f)
+                    || r.exe.to_lowercase().contains(&f))
         });
         let key = self.sort;
         rows.sort_by(|a, b| {
@@ -500,7 +567,8 @@ impl App {
             };
             let o = if self.desc { o.reverse() } else { o };
             // stable tie-break so rows don't jump around between refreshes
-            o.then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())).then_with(|| a.exe.cmp(&b.exe))
+            o.then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                .then_with(|| a.exe.cmp(&b.exe))
         });
         rows
     }
@@ -516,14 +584,28 @@ impl App {
             ui.selectable_value(&mut self.tab, Tab::Routing, format!("VPN routes ({n})"));
             ui.selectable_value(&mut self.tab, Tab::SingBox, "sing-box");
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.button("⌨").on_hover_text("Keyboard shortcuts (H)").clicked() {
+                if ui
+                    .button("⌨")
+                    .on_hover_text("Keyboard shortcuts (H)")
+                    .clicked()
+                {
                     self.show_shortcuts = !self.show_shortcuts;
                 }
-                if ui.small_button("A+").on_hover_text("Bigger (Ctrl +)").clicked() {
-                    ui.ctx().set_zoom_factor((ui.ctx().zoom_factor() + 0.1).min(3.0));
+                if ui
+                    .small_button("A+")
+                    .on_hover_text("Bigger (Ctrl +)")
+                    .clicked()
+                {
+                    ui.ctx()
+                        .set_zoom_factor((ui.ctx().zoom_factor() + 0.1).min(3.0));
                 }
-                if ui.small_button("A−").on_hover_text("Smaller (Ctrl −)").clicked() {
-                    ui.ctx().set_zoom_factor((ui.ctx().zoom_factor() - 0.1).max(0.6));
+                if ui
+                    .small_button("A−")
+                    .on_hover_text("Smaller (Ctrl −)")
+                    .clicked()
+                {
+                    ui.ctx()
+                        .set_zoom_factor((ui.ctx().zoom_factor() - 0.1).max(0.6));
                 }
                 ui.separator();
                 let busy = self.busy.is_some();
@@ -542,10 +624,21 @@ impl App {
         let inst = &self.snap.instances;
         let managed = singbox::managed_pid(&self.paths.state);
         match inst.iter().find(|i| self.uses_our_config(i)) {
-            Some(i) if Some(i.pid) == managed => (format!("● sing-box running (pid {})", i.pid), GREEN),
-            Some(i) => (format!("● sing-box running (pid {}, not managed)", i.pid), YELLOW),
+            Some(i) if Some(i.pid) == managed => {
+                (format!("● sing-box running (pid {})", i.pid), GREEN)
+            }
+            Some(i) => (
+                format!("● sing-box running (pid {}, not managed)", i.pid),
+                YELLOW,
+            ),
             None if inst.is_empty() => ("● sing-box not running".into(), RED),
-            None => (format!("● sing-box running with another config (pid {})", inst[0].pid), YELLOW),
+            None => (
+                format!(
+                    "● sing-box running with another config (pid {})",
+                    inst[0].pid
+                ),
+                YELLOW,
+            ),
         }
     }
 
@@ -561,7 +654,13 @@ impl App {
                 ui.separator();
             }
             if let Some((m, err)) = self.messages.last() {
-                let resp = ui.label(RichText::new(m.lines().next().unwrap_or("")).color(if *err { RED } else { GREEN }));
+                let resp = ui.label(
+                    RichText::new(m.lines().next().unwrap_or("")).color(if *err {
+                        RED
+                    } else {
+                        GREEN
+                    }),
+                );
                 if m.contains('\n') {
                     resp.on_hover_text(m);
                 }
@@ -582,29 +681,42 @@ impl App {
                 r.surrender_focus();
             }
             ui.label("Active in last");
-            let label = WINDOWS.iter().find(|w| w.0 == self.settings.window_secs).map_or("custom", |w| w.1);
+            let label = WINDOWS
+                .iter()
+                .find(|w| w.0 == self.settings.window_secs)
+                .map_or("custom", |w| w.1);
             let before = self.settings.window_secs;
-            egui::ComboBox::from_id_salt("window").selected_text(label).show_ui(ui, |ui| {
-                for (secs, text) in WINDOWS {
-                    ui.selectable_value(&mut self.settings.window_secs, secs, text);
-                }
-            });
+            egui::ComboBox::from_id_salt("window")
+                .selected_text(label)
+                .show_ui(ui, |ui| {
+                    for (secs, text) in WINDOWS {
+                        ui.selectable_value(&mut self.settings.window_secs, secs, text);
+                    }
+                });
             if self.settings.window_secs != before {
-                self.monitor.retention.store(self.settings.window_secs, std::sync::atomic::Ordering::Relaxed);
+                self.monitor.retention.store(
+                    self.settings.window_secs,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
                 self.save_settings();
             }
             ui.separator();
             ui.label("Sort by");
             let before = self.sort;
-            egui::ComboBox::from_id_salt("sort").selected_text(self.sort.label()).show_ui(ui, |ui| {
-                for k in SortKey::ALL {
-                    ui.selectable_value(&mut self.sort, k, k.label());
-                }
-            });
+            egui::ComboBox::from_id_salt("sort")
+                .selected_text(self.sort.label())
+                .show_ui(ui, |ui| {
+                    for k in SortKey::ALL {
+                        ui.selectable_value(&mut self.sort, k, k.label());
+                    }
+                });
             if self.sort != before {
                 self.desc = self.sort.default_desc();
             }
-            if ui.button(if self.desc { "⬇ desc" } else { "⬆ asc" }).clicked() {
+            if ui
+                .button(if self.desc { "⬇ desc" } else { "⬆ asc" })
+                .clicked()
+            {
                 self.desc = !self.desc;
             }
             ui.separator();
@@ -625,8 +737,22 @@ impl App {
             return;
         }
         let header = |ui: &mut egui::Ui, app: &mut App, key: SortKey, text: &str| {
-            let arrow = if app.sort == key { if app.desc { " ⬇" } else { " ⬆" } } else { "" };
-            if ui.selectable_label(app.sort == key, RichText::new(format!("{text}{arrow}")).strong()).clicked() {
+            let arrow = if app.sort == key {
+                if app.desc {
+                    " ⬇"
+                } else {
+                    " ⬆"
+                }
+            } else {
+                ""
+            };
+            if ui
+                .selectable_label(
+                    app.sort == key,
+                    RichText::new(format!("{text}{arrow}")).strong(),
+                )
+                .clicked()
+            {
                 if app.sort == key {
                     app.desc = !app.desc;
                 } else {
@@ -692,6 +818,11 @@ impl App {
                         }
                     });
                     row.col(|ui| {
+                        if let Some(tex) = self.icons.get(ui.ctx(), &r.exe, &r.name) {
+                            ui.add(egui::Image::new(&tex).max_size(egui::vec2(18.0, 18.0)));
+                        } else {
+                            ui.add_space(20.0);
+                        }
                         ui.label(RichText::new(&r.name).strong());
                     });
                     row.col(|ui| {
@@ -722,7 +853,11 @@ impl App {
                         ui.label(human(r.traffic as f64));
                     });
                     row.col(|ui| {
-                        ui.label(if r.pids.is_empty() { "—".into() } else { r.pids.len().to_string() });
+                        ui.label(if r.pids.is_empty() {
+                            "—".into()
+                        } else {
+                            r.pids.len().to_string()
+                        });
                     });
                     row.col(|ui| {
                         if !r.pids.is_empty() {
@@ -736,7 +871,11 @@ impl App {
                     });
                     row.col(|ui| {
                         let obs: Vec<&str> = r.outbounds.iter().map(String::as_str).collect();
-                        let color = if obs.iter().any(|o| *o != "direct") { GREEN } else { ui.visuals().weak_text_color() };
+                        let color = if obs.iter().any(|o| *o != "direct") {
+                            GREEN
+                        } else {
+                            ui.visuals().weak_text_color()
+                        };
                         ui.label(RichText::new(obs.join(",")).color(color));
                     });
                     row.col(|ui| {
@@ -747,7 +886,11 @@ impl App {
                         actions.push(Action::Select(r.exe.clone()));
                     }
                     if resp.double_clicked() && !r.exe.is_empty() {
-                        actions.push(if r.routed { Action::Unroute(r.exe.clone()) } else { Action::Route(r.exe.clone()) });
+                        actions.push(if r.routed {
+                            Action::Unroute(r.exe.clone())
+                        } else {
+                            Action::Route(r.exe.clone())
+                        });
                     }
                     resp.context_menu(|ui| {
                         if ui.button("More details").clicked() {
@@ -780,24 +923,39 @@ impl App {
     }
 
     /// Keyboard control of the app list. Returns a row to scroll to.
-    fn list_keys(&mut self, ctx: &egui::Context, rows: &[Row], actions: &mut Vec<Action>) -> Option<usize> {
+    fn list_keys(
+        &mut self,
+        ctx: &egui::Context,
+        rows: &[Row],
+        actions: &mut Vec<Action>,
+    ) -> Option<usize> {
         use egui::{Key, Modifiers};
         if ctx.wants_keyboard_input() || rows.is_empty() {
             return None;
         }
-        let pos = self.selected.as_ref().and_then(|s| rows.iter().position(|r| &r.exe == s));
+        let pos = self
+            .selected
+            .as_ref()
+            .and_then(|s| rows.iter().position(|r| &r.exe == s));
         let (down, up, home, end, space) = ctx.input_mut(|i| {
             (
-                i.consume_key(Modifiers::NONE, Key::ArrowDown) || i.consume_key(Modifiers::NONE, Key::J),
-                i.consume_key(Modifiers::NONE, Key::ArrowUp) || i.consume_key(Modifiers::NONE, Key::K),
+                i.consume_key(Modifiers::NONE, Key::ArrowDown)
+                    || i.consume_key(Modifiers::NONE, Key::J),
+                i.consume_key(Modifiers::NONE, Key::ArrowUp)
+                    || i.consume_key(Modifiers::NONE, Key::K),
                 i.consume_key(Modifiers::NONE, Key::Home),
                 i.consume_key(Modifiers::NONE, Key::End),
-                i.consume_key(Modifiers::NONE, Key::Space) || i.consume_key(Modifiers::NONE, Key::Enter),
+                i.consume_key(Modifiers::NONE, Key::Space)
+                    || i.consume_key(Modifiers::NONE, Key::Enter),
             )
         });
         if space {
             if let Some(r) = pos.map(|i| &rows[i]).filter(|r| !r.exe.is_empty()) {
-                actions.push(if r.routed { Action::Unroute(r.exe.clone()) } else { Action::Route(r.exe.clone()) });
+                actions.push(if r.routed {
+                    Action::Unroute(r.exe.clone())
+                } else {
+                    Action::Route(r.exe.clone())
+                });
             }
         }
         let last = rows.len() - 1;
@@ -814,9 +972,19 @@ impl App {
     }
 
     fn details(&mut self, ui: &mut egui::Ui, exe: &str, actions: &mut Vec<Action>) {
-        let procs: Vec<_> = self.snap.procs.iter().filter(|p| !exe.is_empty() && p.exe == exe).cloned().collect();
+        let procs: Vec<_> = self
+            .snap
+            .procs
+            .iter()
+            .filter(|p| !exe.is_empty() && p.exe == exe)
+            .cloned()
+            .collect();
         let routed = !exe.is_empty() && self.cfg.items(APP_KEY).iter().any(|a| a == exe);
-        let name = if exe.is_empty() { "(unknown process)".into() } else { file_name(exe) };
+        let name = if exe.is_empty() {
+            "(unknown process)".into()
+        } else {
+            file_name(exe)
+        };
 
         ui.horizontal(|ui| {
             ui.heading(name);
@@ -835,83 +1003,157 @@ impl App {
             );
         } else if routed {
             ui.label(RichText::new("● Routed via VPN").color(GREEN).strong());
-            if ui.add(egui::Button::new("➖ Remove from VPN routes").min_size([220.0, 28.0].into())).clicked() {
+            if ui
+                .add(egui::Button::new("➖ Remove from VPN routes").min_size([220.0, 28.0].into()))
+                .clicked()
+            {
                 actions.push(Action::Unroute(exe.to_owned()));
             }
         } else {
-            ui.label(format!("Not routed (goes to “{}”)", self.cfg.final_outbound()));
-            if ui.add(egui::Button::new(RichText::new("➕ Route via VPN").strong()).min_size([220.0, 28.0].into())).clicked() {
+            ui.label(format!(
+                "Not routed (goes to “{}”)",
+                self.cfg.final_outbound()
+            ));
+            if ui
+                .add(
+                    egui::Button::new(RichText::new("➕ Route via VPN").strong())
+                        .min_size([220.0, 28.0].into()),
+                )
+                .clicked()
+            {
                 actions.push(Action::Route(exe.to_owned()));
             }
         }
         ui.separator();
 
         // history for this app, re-queried every couple of seconds
-        if self.flows.0 != exe || self.flows.1.is_none_or(|t| t.elapsed() > Duration::from_secs(2)) {
+        if self.flows.0 != exe
+            || self
+                .flows
+                .1
+                .is_none_or(|t| t.elapsed() > Duration::from_secs(2))
+        {
             if self.db.is_none() {
                 self.db = history::open(&self.paths.state.join("history.db")).ok();
             }
-            let flows = self.db.as_ref().and_then(|db| history::flows(db, exe).ok()).unwrap_or_default();
+            let flows = self
+                .db
+                .as_ref()
+                .and_then(|db| history::flows(db, exe).ok())
+                .unwrap_or_default();
             self.flows = (exe.to_owned(), Some(Instant::now()), flows);
         }
 
-        let mut conns: Vec<&Conn> = self.snap.conns.iter().filter(|c| c.app == exe && c.port != 53).collect();
-        conns.sort_by(|a, b| (b.rate_down + b.rate_up).total_cmp(&(a.rate_down + a.rate_up)).then(b.down.cmp(&a.down)));
-        let now = history::now();
-        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            egui::CollapsingHeader::new(format!("Open connections ({})", conns.len())).default_open(true).show(ui, |ui| {
-                if conns.is_empty() {
-                    ui.weak("none right now");
-                }
-                egui::Grid::new("conns").striped(true).num_columns(4).show(ui, |ui| {
-                    for c in conns.iter().take(200) {
-                        ui.label(RichText::new(format!("{}:{}", c.host, c.port)).monospace())
-                            .on_hover_text(format!("{} {} · rule: {}", c.network, c.ip, c.rule));
-                        let col = if c.outbound == "direct" { ui.visuals().weak_text_color() } else { GREEN };
-                        ui.label(RichText::new(&c.outbound).color(col));
-                        ui.label(format!("↓{} ↑{}", rate(c.rate_down), rate(c.rate_up)));
-                        ui.label(human((c.up + c.down) as f64));
-                        ui.end_row();
-                    }
-                });
-            });
-            let flows = &self.flows.2;
-            egui::CollapsingHeader::new(format!("Domains seen ({})", flows.len())).default_open(true).show(ui, |ui| {
-                egui::Grid::new("flows").striped(true).num_columns(5).show(ui, |ui| {
-                    for f in flows {
-                        ui.label(RichText::new(format!("{}:{}", f.target, f.port)).monospace());
-                        let col = if f.outbound == "direct" { ui.visuals().weak_text_color() } else { GREEN };
-                        ui.label(RichText::new(&f.outbound).color(col));
-                        ui.label(format!("{}×", f.hits));
-                        ui.label(human(f.traffic as f64));
-                        ui.label(format!("{} ago", ago(now - f.last_seen)));
-                        ui.end_row();
-                    }
-                });
-                if !flows.is_empty() && ui.small_button("Forget this app's history").clicked() {
-                    actions.push(Action::Forget(exe.to_owned()));
-                }
-            });
-            egui::CollapsingHeader::new(format!("Running processes ({})", procs.len())).default_open(false).show(ui, |ui| {
-                egui::Grid::new("procs").striped(true).num_columns(5).show(ui, |ui| {
-                    for p in &procs {
-                        ui.label(p.pid.to_string());
-                        ui.label(&p.user);
-                        ui.label(format!("{:.1}%", p.cpu));
-                        ui.label(human(p.rss as f64));
-                        let cmd: String = p.cmdline.chars().take(80).collect();
-                        ui.label(RichText::new(cmd).monospace().small()).on_hover_text(&p.cmdline);
-                        ui.end_row();
-                    }
-                });
-            });
+        let mut conns: Vec<&Conn> = self
+            .snap
+            .conns
+            .iter()
+            .filter(|c| c.app == exe && c.port != 53)
+            .collect();
+        conns.sort_by(|a, b| {
+            (b.rate_down + b.rate_up)
+                .total_cmp(&(a.rate_down + a.rate_up))
+                .then(b.down.cmp(&a.down))
         });
+        let now = history::now();
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                egui::CollapsingHeader::new(format!("Open connections ({})", conns.len()))
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        if conns.is_empty() {
+                            ui.weak("none right now");
+                        }
+                        egui::Grid::new("conns")
+                            .striped(true)
+                            .num_columns(4)
+                            .show(ui, |ui| {
+                                for c in conns.iter().take(200) {
+                                    ui.label(
+                                        RichText::new(format!("{}:{}", c.host, c.port)).monospace(),
+                                    )
+                                    .on_hover_text(format!(
+                                        "{} {} · rule: {}",
+                                        c.network, c.ip, c.rule
+                                    ));
+                                    let col = if c.outbound == "direct" {
+                                        ui.visuals().weak_text_color()
+                                    } else {
+                                        GREEN
+                                    };
+                                    ui.label(RichText::new(&c.outbound).color(col));
+                                    ui.label(format!(
+                                        "↓{} ↑{}",
+                                        rate(c.rate_down),
+                                        rate(c.rate_up)
+                                    ));
+                                    ui.label(human((c.up + c.down) as f64));
+                                    ui.end_row();
+                                }
+                            });
+                    });
+                let flows = &self.flows.2;
+                egui::CollapsingHeader::new(format!("Domains seen ({})", flows.len()))
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        egui::Grid::new("flows")
+                            .striped(true)
+                            .num_columns(5)
+                            .show(ui, |ui| {
+                                for f in flows {
+                                    ui.label(
+                                        RichText::new(format!("{}:{}", f.target, f.port))
+                                            .monospace(),
+                                    );
+                                    let col = if f.outbound == "direct" {
+                                        ui.visuals().weak_text_color()
+                                    } else {
+                                        GREEN
+                                    };
+                                    ui.label(RichText::new(&f.outbound).color(col));
+                                    ui.label(format!("{}×", f.hits));
+                                    ui.label(human(f.traffic as f64));
+                                    ui.label(format!("{} ago", ago(now - f.last_seen)));
+                                    ui.end_row();
+                                }
+                            });
+                        if !flows.is_empty()
+                            && ui.small_button("Forget this app's history").clicked()
+                        {
+                            actions.push(Action::Forget(exe.to_owned()));
+                        }
+                    });
+                egui::CollapsingHeader::new(format!("Running processes ({})", procs.len()))
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        egui::Grid::new("procs")
+                            .striped(true)
+                            .num_columns(5)
+                            .show(ui, |ui| {
+                                for p in &procs {
+                                    ui.label(p.pid.to_string());
+                                    ui.label(&p.user);
+                                    ui.label(format!("{:.1}%", p.cpu));
+                                    ui.label(human(p.rss as f64));
+                                    let cmd: String = p.cmdline.chars().take(80).collect();
+                                    ui.label(RichText::new(cmd).monospace().small())
+                                        .on_hover_text(&p.cmdline);
+                                    ui.end_row();
+                                }
+                            });
+                    });
+            });
     }
 
     fn routing(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label("VPN outbound:");
-            ui.label(RichText::new(self.cfg.vpn_tag().unwrap_or_else(|| "(none!)".into())).color(GREEN).strong());
+            ui.label(
+                RichText::new(self.cfg.vpn_tag().unwrap_or_else(|| "(none!)".into()))
+                    .color(GREEN)
+                    .strong(),
+            );
             ui.separator();
             ui.label(format!("everything else → {}", self.cfg.final_outbound()));
             ui.separator();
@@ -922,51 +1164,83 @@ impl App {
                 self.apply();
             }
         });
-        ui.label(RichText::new(self.paths.config.display().to_string()).monospace().weak());
+        ui.label(
+            RichText::new(self.paths.config.display().to_string())
+                .monospace()
+                .weak(),
+        );
         ui.separator();
 
         let running: BTreeSet<&str> = self.snap.procs.iter().map(|p| p.exe.as_str()).collect();
         let mut remove: Option<(&str, String)> = None;
         let mut add: Option<(&str, String)> = None;
-        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            ui.heading("Apps (process_path)");
-            for a in self.cfg.items(APP_KEY) {
-                ui.horizontal(|ui| {
-                    if ui.small_button("✖").on_hover_text("remove from VPN").clicked() {
-                        remove = Some((APP_KEY, a.clone()));
-                    }
-                    let (dot, col) = if running.contains(a.as_str()) { ("●", GREEN) } else { ("○", Color32::GRAY) };
-                    ui.label(RichText::new(dot).color(col)).on_hover_text("running now?");
-                    ui.label(RichText::new(&a).monospace());
-                });
-            }
-            ui.horizontal(|ui| {
-                let r = ui.add(egui::TextEdit::singleline(&mut self.new_app).hint_text("/path/to/executable").desired_width(360.0));
-                if (ui.button("Add app").clicked() || r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                    && !self.new_app.trim().is_empty()
-                {
-                    add = Some((APP_KEY, std::mem::take(&mut self.new_app).trim().to_owned()));
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                ui.heading("Apps (process_path)");
+                for a in self.cfg.items(APP_KEY) {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .small_button("✖")
+                            .on_hover_text("remove from VPN")
+                            .clicked()
+                        {
+                            remove = Some((APP_KEY, a.clone()));
+                        }
+                        let (dot, col) = if running.contains(a.as_str()) {
+                            ("●", GREEN)
+                        } else {
+                            ("○", Color32::GRAY)
+                        };
+                        ui.label(RichText::new(dot).color(col))
+                            .on_hover_text("running now?");
+                        ui.label(RichText::new(&a).monospace());
+                    });
                 }
-            });
-            ui.add_space(12.0);
-            ui.heading("Domains (domain_suffix)");
-            for d in self.cfg.items(DOMAIN_KEY) {
                 ui.horizontal(|ui| {
-                    if ui.small_button("✖").on_hover_text("remove from VPN").clicked() {
-                        remove = Some((DOMAIN_KEY, d.clone()));
+                    let r = ui.add(
+                        egui::TextEdit::singleline(&mut self.new_app)
+                            .hint_text("/path/to/executable")
+                            .desired_width(360.0),
+                    );
+                    if (ui.button("Add app").clicked()
+                        || r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                        && !self.new_app.trim().is_empty()
+                    {
+                        add = Some((APP_KEY, std::mem::take(&mut self.new_app).trim().to_owned()));
                     }
-                    ui.label(RichText::new(&d).monospace());
                 });
-            }
-            ui.horizontal(|ui| {
-                let r = ui.add(egui::TextEdit::singleline(&mut self.new_domain).hint_text("example.com").desired_width(360.0));
-                if (ui.button("Add domain").clicked() || r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                    && !self.new_domain.trim().is_empty()
-                {
-                    add = Some((DOMAIN_KEY, std::mem::take(&mut self.new_domain).trim().to_lowercase()));
+                ui.add_space(12.0);
+                ui.heading("Domains (domain_suffix)");
+                for d in self.cfg.items(DOMAIN_KEY) {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .small_button("✖")
+                            .on_hover_text("remove from VPN")
+                            .clicked()
+                        {
+                            remove = Some((DOMAIN_KEY, d.clone()));
+                        }
+                        ui.label(RichText::new(&d).monospace());
+                    });
                 }
+                ui.horizontal(|ui| {
+                    let r = ui.add(
+                        egui::TextEdit::singleline(&mut self.new_domain)
+                            .hint_text("example.com")
+                            .desired_width(360.0),
+                    );
+                    if (ui.button("Add domain").clicked()
+                        || r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                        && !self.new_domain.trim().is_empty()
+                    {
+                        add = Some((
+                            DOMAIN_KEY,
+                            std::mem::take(&mut self.new_domain).trim().to_lowercase(),
+                        ));
+                    }
+                });
             });
-        });
         if let Some((k, v)) = remove {
             self.edit_rule(k, &v, false);
         }
@@ -977,95 +1251,157 @@ impl App {
 
     fn singbox_tab(&mut self, ui: &mut egui::Ui) {
         let busy = self.busy.is_some();
-        egui::Grid::new("sb").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-            ui.label("Status");
-            let (t, c) = self.status();
-            ui.label(RichText::new(t).color(c));
-            ui.end_row();
-            ui.label("Binary");
-            ui.horizontal(|ui| {
-                if ui.add(egui::TextEdit::singleline(&mut self.settings.singbox).desired_width(480.0)).lost_focus() {
-                    self.save_settings();
-                }
-                if ui.button("Detect").clicked() {
-                    self.settings.singbox = singbox::default_binary();
-                    self.save_settings();
-                }
+        egui::Grid::new("sb")
+            .num_columns(2)
+            .spacing([12.0, 8.0])
+            .show(ui, |ui| {
+                ui.label("Status");
+                let (t, c) = self.status();
+                ui.label(RichText::new(t).color(c));
+                ui.end_row();
+                ui.label("Binary");
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.settings.singbox)
+                                .desired_width(480.0),
+                        )
+                        .lost_focus()
+                    {
+                        self.save_settings();
+                    }
+                    if ui.button("Detect").clicked() {
+                        self.settings.singbox = singbox::default_binary();
+                        self.save_settings();
+                    }
+                });
+                ui.end_row();
+                ui.label("Config");
+                ui.label(RichText::new(self.paths.config.display().to_string()).monospace());
+                ui.end_row();
+                ui.label("Log");
+                ui.label(
+                    RichText::new(self.paths.state.join("sing-box.log").display().to_string())
+                        .monospace(),
+                );
+                ui.end_row();
+                ui.label("Options");
+                ui.vertical(|ui| {
+                    if ui
+                        .checkbox(
+                            &mut self.settings.reset_on_start,
+                            "Reset sing-box when oxito starts",
+                        )
+                        .changed()
+                    {
+                        self.save_settings();
+                    }
+                    if ui
+                        .checkbox(
+                            &mut self.settings.stop_others,
+                            "Reset also stops sing-box instances using other configs",
+                        )
+                        .changed()
+                    {
+                        self.save_settings();
+                    }
+                });
+                ui.end_row();
             });
-            ui.end_row();
-            ui.label("Config");
-            ui.label(RichText::new(self.paths.config.display().to_string()).monospace());
-            ui.end_row();
-            ui.label("Log");
-            ui.label(RichText::new(self.paths.state.join("sing-box.log").display().to_string()).monospace());
-            ui.end_row();
-            ui.label("Options");
-            ui.vertical(|ui| {
-                if ui.checkbox(&mut self.settings.reset_on_start, "Reset sing-box when oxito starts").changed() {
-                    self.save_settings();
-                }
-                if ui
-                    .checkbox(&mut self.settings.stop_others, "Reset also stops sing-box instances using other configs")
-                    .changed()
-                {
-                    self.save_settings();
-                }
-            });
-            ui.end_row();
-        });
         ui.horizontal(|ui| {
-            if ui.add_enabled(!busy, egui::Button::new("⟳ Reset (restart with this config)")).clicked() {
+            if ui
+                .add_enabled(
+                    !busy,
+                    egui::Button::new("⟳ Reset (restart with this config)"),
+                )
+                .clicked()
+            {
                 self.reset();
             }
             if ui.add_enabled(!busy, egui::Button::new("Reload")).clicked() {
                 self.apply();
             }
-            if ui.add_enabled(!busy && !self.snap.instances.is_empty(), egui::Button::new("Stop")).clicked() {
+            if ui
+                .add_enabled(
+                    !busy && !self.snap.instances.is_empty(),
+                    egui::Button::new("Stop"),
+                )
+                .clicked()
+            {
                 self.stop();
             }
-            if ui.add_enabled(!busy, egui::Button::new("Check config")).clicked() {
+            if ui
+                .add_enabled(!busy, egui::Button::new("Check config"))
+                .clicked()
+            {
                 self.check();
             }
         });
         ui.separator();
         ui.strong("Running instances");
         let managed = singbox::managed_pid(&self.paths.state);
-        egui::Grid::new("inst").striped(true).num_columns(4).show(ui, |ui| {
-            for i in &self.snap.instances {
-                ui.label(i.pid.to_string());
-                ui.label(if Some(i.pid) == managed { "managed" } else { "external" });
-                ui.label(RichText::new(&i.binary).monospace());
-                let cfg = i.config.as_ref().map(|c| c.display().to_string()).unwrap_or("?".into());
-                let col = if self.uses_our_config(i) { GREEN } else { YELLOW };
-                ui.label(RichText::new(cfg).monospace().color(col));
-                ui.end_row();
-            }
-        });
+        egui::Grid::new("inst")
+            .striped(true)
+            .num_columns(4)
+            .show(ui, |ui| {
+                for i in &self.snap.instances {
+                    ui.label(i.pid.to_string());
+                    ui.label(if Some(i.pid) == managed {
+                        "managed"
+                    } else {
+                        "external"
+                    });
+                    ui.label(RichText::new(&i.binary).monospace());
+                    let cfg = i
+                        .config
+                        .as_ref()
+                        .map(|c| c.display().to_string())
+                        .unwrap_or("?".into());
+                    let col = if self.uses_our_config(i) {
+                        GREEN
+                    } else {
+                        YELLOW
+                    };
+                    ui.label(RichText::new(cfg).monospace().color(col));
+                    ui.end_row();
+                }
+            });
         if self.snap.instances.is_empty() {
             ui.weak("none");
         }
         ui.separator();
 
-        if self.log_read.is_none_or(|t| t.elapsed() > Duration::from_secs(2)) {
+        if self
+            .log_read
+            .is_none_or(|t| t.elapsed() > Duration::from_secs(2))
+        {
             self.log_tail = tail(&self.paths.state.join("sing-box.log"), 300);
             self.log_read = Some(Instant::now());
         }
         ui.strong("sing-box log");
-        egui::ScrollArea::vertical().auto_shrink(false).stick_to_bottom(true).show(ui, |ui| {
-            ui.label(RichText::new(&self.log_tail).monospace().small());
-        });
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                ui.label(RichText::new(&self.log_tail).monospace().small());
+            });
     }
 
     fn global_keys(&mut self, ctx: &egui::Context) {
         use egui::{Key, Modifiers};
         let typing = ctx.wants_keyboard_input();
         let (tab, reset, focus_filter, toggle, hide, help) = ctx.input_mut(|i| {
-            let tab = [(Key::Num1, Tab::Apps), (Key::Num2, Tab::Routing), (Key::Num3, Tab::SingBox)]
-                .into_iter()
-                .find(|(k, _)| i.consume_key(Modifiers::ALT, *k))
-                .map(|(_, t)| t);
+            let tab = [
+                (Key::Num1, Tab::Apps),
+                (Key::Num2, Tab::Routing),
+                (Key::Num3, Tab::SingBox),
+            ]
+            .into_iter()
+            .find(|(k, _)| i.consume_key(Modifiers::ALT, *k))
+            .map(|(_, t)| t);
             let reset = i.consume_key(Modifiers::CTRL, Key::R);
-            let focus = i.consume_key(Modifiers::CTRL, Key::F) || (!typing && i.consume_key(Modifiers::NONE, Key::Slash));
+            let focus = i.consume_key(Modifiers::CTRL, Key::F)
+                || (!typing && i.consume_key(Modifiers::NONE, Key::Slash));
             // before the list sees Enter: a plain-Enter check also matches Shift+Enter
             let toggle = !typing && i.consume_key(Modifiers::SHIFT, Key::Enter);
             let hide = !typing && i.consume_key(Modifiers::NONE, Key::Escape);
@@ -1113,12 +1449,16 @@ impl App {
 
     fn track_window_size(&mut self, ctx: &egui::Context) {
         let (rect, minimized) = ctx.input(|i| (i.viewport().inner_rect, i.viewport().minimized));
-        let Some(rect) = rect.filter(|r| minimized != Some(true) && r.width() > 100.0 && r.height() > 100.0) else {
+        let Some(rect) =
+            rect.filter(|r| minimized != Some(true) && r.width() > 100.0 && r.height() > 100.0)
+        else {
             return;
         };
         // points -> logical pixels, which is what the window is created with
         let size = (rect.size() * ctx.zoom_factor()).round();
-        if (size.x - self.settings.window_size[0]).abs() < 1.0 && (size.y - self.settings.window_size[1]).abs() < 1.0 {
+        if (size.x - self.settings.window_size[0]).abs() < 1.0
+            && (size.y - self.settings.window_size[1]).abs() < 1.0
+        {
             self.resized = None;
             return;
         }
@@ -1134,11 +1474,19 @@ impl App {
     }
 
     fn messages_window(&self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical().stick_to_bottom(true).max_height(90.0).auto_shrink([false, true]).show(ui, |ui| {
-            for (m, err) in &self.messages {
-                ui.label(RichText::new(m).small().color(if *err { RED } else { ui.visuals().text_color() }));
-            }
-        });
+        egui::ScrollArea::vertical()
+            .stick_to_bottom(true)
+            .max_height(90.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                for (m, err) in &self.messages {
+                    ui.label(RichText::new(m).small().color(if *err {
+                        RED
+                    } else {
+                        ui.visuals().text_color()
+                    }));
+                }
+            });
     }
 }
 
@@ -1155,7 +1503,9 @@ impl eframe::App for App {
         egui::TopBottomPanel::top("top").show(ctx, |ui| self.top_bar(ui));
         egui::TopBottomPanel::bottom("bottom").show(ctx, |ui| self.bottom_bar(ui));
         if self.tab == Tab::SingBox {
-            egui::TopBottomPanel::bottom("messages").resizable(true).show(ctx, |ui| self.messages_window(ui));
+            egui::TopBottomPanel::bottom("messages")
+                .resizable(true)
+                .show(ctx, |ui| self.messages_window(ui));
         }
         if self.tab == Tab::Apps {
             if let Some(key) = self.selected.clone().filter(|_| self.details_open) {
@@ -1172,7 +1522,10 @@ impl eframe::App for App {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 // don't wrap: the window grows to the longest line
-                ui.add(egui::Label::new(RichText::new(SHORTCUTS).monospace()).wrap_mode(egui::TextWrapMode::Extend))
+                ui.add(
+                    egui::Label::new(RichText::new(SHORTCUTS).monospace())
+                        .wrap_mode(egui::TextWrapMode::Extend),
+                )
             });
         egui::CentralPanel::default().show(ctx, |ui| match self.tab {
             Tab::Apps => self.apps(ui, &mut actions),
@@ -1209,7 +1562,9 @@ fn install_fallback_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     for path in CANDIDATES {
         let Ok(bytes) = fs::read(path) else { continue };
-        fonts.font_data.insert(path.into(), egui::FontData::from_owned(bytes));
+        fonts
+            .font_data
+            .insert(path.into(), egui::FontData::from_owned(bytes));
         for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
             fonts.families.entry(family).or_default().push(path.into());
         }
@@ -1218,7 +1573,10 @@ fn install_fallback_fonts(ctx: &egui::Context) {
 }
 
 fn file_name(path: &str) -> String {
-    Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_owned())
+    Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_owned())
 }
 
 fn same_file(a: &Path, b: &Path) -> bool {
@@ -1266,10 +1624,16 @@ fn tail(path: &Path, lines: usize) -> String {
         f.read_to_end(&mut buf)?;
         Ok((buf, start > 0))
     };
-    let Ok((buf, cut)) = fs::File::open(path).and_then(|mut f| read(&mut f)) else { return String::new() };
+    let Ok((buf, cut)) = fs::File::open(path).and_then(|mut f| read(&mut f)) else {
+        return String::new();
+    };
     let text = String::from_utf8_lossy(&buf);
     // drop the partial first line when reading from the middle
-    let text = if cut { text.split_once('\n').map_or("", |(_, rest)| rest) } else { &text };
+    let text = if cut {
+        text.split_once('\n').map_or("", |(_, rest)| rest)
+    } else {
+        &text
+    };
     let text = strip_ansi(text);
     let all: Vec<&str> = text.lines().collect();
     all[all.len().saturating_sub(lines)..].join("\n")

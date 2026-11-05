@@ -44,7 +44,10 @@ fn array<'a>(m: &'a mut Map<String, Value>, key: &str) -> &'a mut Vec<Value> {
 
 fn list_items(v: &Value) -> Vec<String> {
     match v {
-        Value::Array(a) => a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect(),
+        Value::Array(a) => a
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect(),
         Value::String(s) => vec![s.clone()],
         _ => vec![],
     }
@@ -61,15 +64,22 @@ pub fn rules_path(config: &Path) -> PathBuf {
 
 impl Config {
     pub fn new(path: &Path, data: Value) -> Self {
-        Self { path: path.to_owned(), data, rules_path: rules_path(path), rules: empty_rules() }
+        Self {
+            path: path.to_owned(),
+            data,
+            rules_path: rules_path(path),
+            rules: empty_rules(),
+        }
     }
 
     pub fn load(path: &Path) -> Result<Self, String> {
         let text = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-        let data = serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
+        let data =
+            serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
         let mut cfg = Self::new(path, data);
         if let Ok(text) = fs::read_to_string(&cfg.rules_path) {
-            cfg.rules = serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", cfg.rules_path.display()))?;
+            cfg.rules = serde_json::from_str(&text)
+                .map_err(|e| format!("parse {}: {e}", cfg.rules_path.display()))?;
         }
         Ok(cfg)
     }
@@ -109,11 +119,17 @@ impl Config {
     }
 
     pub fn final_outbound(&self) -> String {
-        self.data["route"]["final"].as_str().unwrap_or("?").to_owned()
+        self.data["route"]["final"]
+            .as_str()
+            .unwrap_or("?")
+            .to_owned()
     }
 
     fn route_rules(&self) -> &[Value] {
-        self.data["route"]["rules"].as_array().map(Vec::as_slice).unwrap_or(&[])
+        self.data["route"]["rules"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     fn route_rules_mut(&mut self) -> &mut Vec<Value> {
@@ -123,7 +139,9 @@ impl Config {
     /// Index of the old-style VPN rule in the config that matches only on `key`.
     fn route_rule_index(&self, key: &str, vpn: &str) -> Option<usize> {
         self.route_rules().iter().position(|r| {
-            r["outbound"].as_str() == Some(vpn) && r.get(key).is_some() && r.as_object().map(Map::len) == Some(2)
+            r["outbound"].as_str() == Some(vpn)
+                && r.get(key).is_some()
+                && r.as_object().map(Map::len) == Some(2)
         })
     }
 
@@ -133,11 +151,16 @@ impl Config {
 
     /// Index of the rule-set rule that matches only on `key`.
     fn rule_index(&self, key: &str) -> Option<usize> {
-        self.rules["rules"].as_array()?.iter().position(|r| r.get(key).is_some() && r.as_object().map(Map::len) == Some(1))
+        self.rules["rules"]
+            .as_array()?
+            .iter()
+            .position(|r| r.get(key).is_some() && r.as_object().map(Map::len) == Some(1))
     }
 
     pub fn items(&self, key: &str) -> Vec<String> {
-        let Some(i) = self.rule_index(key) else { return vec![] };
+        let Some(i) = self.rule_index(key) else {
+            return vec![];
+        };
         list_items(&self.rules["rules"][i][key])
     }
 
@@ -163,10 +186,15 @@ impl Config {
     }
 
     pub fn remove(&mut self, key: &str, value: &str) -> bool {
-        let Some(i) = self.rule_index(key) else { return false };
+        let Some(i) = self.rule_index(key) else {
+            return false;
+        };
         let rules = self.set_rules_mut();
         let n = list_items(&rules[i][key]).len();
-        let rest: Vec<String> = list_items(&rules[i][key]).into_iter().filter(|v| v != value).collect();
+        let rest: Vec<String> = list_items(&rules[i][key])
+            .into_iter()
+            .filter(|v| v != value)
+            .collect();
         if rest.len() == n {
             return false;
         }
@@ -184,11 +212,21 @@ impl Config {
     pub fn setup(&mut self) -> bool {
         let mut changed = self.setup_rule_set();
         let api = obj(child(child(&mut self.data, "experimental"), "clash_api"));
-        if api.get("external_controller").and_then(Value::as_str).unwrap_or("").is_empty() {
+        if api
+            .get("external_controller")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .is_empty()
+        {
             api.insert("external_controller".into(), json!(DEFAULT_API));
             changed = true;
         }
-        if api.get("secret").and_then(Value::as_str).unwrap_or("").is_empty() {
+        if api
+            .get("secret")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .is_empty()
+        {
             api.insert("secret".into(), json!(random_hex(16)));
             changed = true;
         }
@@ -209,7 +247,9 @@ impl Config {
     }
 
     fn setup_rule_set(&mut self) -> bool {
-        let Some(vpn) = self.vpn_tag() else { return false };
+        let Some(vpn) = self.vpn_tag() else {
+            return false;
+        };
         let mut changed = false;
         for key in [APP_KEY, DOMAIN_KEY] {
             if let Some(i) = self.route_rule_index(key, &vpn) {
@@ -221,9 +261,13 @@ impl Config {
             }
         }
         let path = self.rules_path.to_string_lossy().into_owned();
-        let entry = json!({ "tag": RULE_SET_TAG, "type": "local", "format": "source", "path": path });
+        let entry =
+            json!({ "tag": RULE_SET_TAG, "type": "local", "format": "source", "path": path });
         let sets = array(obj(child(&mut self.data, "route")), "rule_set");
-        match sets.iter_mut().find(|s| s["tag"].as_str() == Some(RULE_SET_TAG)) {
+        match sets
+            .iter_mut()
+            .find(|s| s["tag"].as_str() == Some(RULE_SET_TAG))
+        {
             Some(s) if *s == entry => {}
             Some(s) => {
                 *s = entry;
@@ -241,7 +285,12 @@ impl Config {
             // keep sniff / hijack-dns / resolve rules in front
             let idx = rules
                 .iter()
-                .rposition(|r| matches!(r["action"].as_str(), Some("sniff" | "hijack-dns" | "resolve")))
+                .rposition(|r| {
+                    matches!(
+                        r["action"].as_str(),
+                        Some("sniff" | "hijack-dns" | "resolve")
+                    )
+                })
                 .map_or(0, |i| i + 1);
             rules.insert(idx, rule);
             changed = true;
@@ -262,7 +311,10 @@ mod tests {
     use super::*;
 
     fn cfg() -> Config {
-        Config::new(Path::new("/tmp/oxito/config.json"), serde_json::from_str(crate::EXAMPLE_CONFIG).unwrap())
+        Config::new(
+            Path::new("/tmp/oxito/config.json"),
+            serde_json::from_str(crate::EXAMPLE_CONFIG).unwrap(),
+        )
     }
 
     #[test]
@@ -271,8 +323,15 @@ mod tests {
         assert!(c.setup());
         assert_eq!(c.items(APP_KEY).len(), 2);
         let route = &c.data["route"];
-        assert_eq!(route["rules"][2], json!({ "rule_set": RULE_SET_TAG, "outbound": "xray-proxy" }));
-        assert!(route["rules"].as_array().unwrap().iter().all(|r| r.get(APP_KEY).is_none()));
+        assert_eq!(
+            route["rules"][2],
+            json!({ "rule_set": RULE_SET_TAG, "outbound": "xray-proxy" })
+        );
+        assert!(route["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r.get(APP_KEY).is_none()));
         assert_eq!(route["rule_set"][0]["path"], "/tmp/oxito/config.rules.json");
         assert_eq!(route["find_process"], true);
         assert!(!c.setup());

@@ -46,7 +46,12 @@ impl Scanner {
             })
             .collect();
         // SAFETY: sysconf has no preconditions
-        let (clk, page) = unsafe { (libc::sysconf(libc::_SC_CLK_TCK), libc::sysconf(libc::_SC_PAGESIZE)) };
+        let (clk, page) = unsafe {
+            (
+                libc::sysconf(libc::_SC_CLK_TCK),
+                libc::sysconf(libc::_SC_PAGESIZE),
+            )
+        };
         Self {
             cache: HashMap::new(),
             prev_ticks: HashMap::new(),
@@ -61,9 +66,17 @@ impl Scanner {
     pub fn scan(&mut self) -> Vec<Proc> {
         let mut cache = HashMap::with_capacity(self.cache.len());
         let mut out = Vec::new();
-        let Ok(dir) = fs::read_dir("/proc") else { return out };
+        let Ok(dir) = fs::read_dir("/proc") else {
+            return out;
+        };
         for entry in dir.flatten() {
-            let Some(pid) = entry.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else { continue };
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|s| s.parse::<u32>().ok())
+            else {
+                continue;
+            };
             let link = fs::read_link(format!("/proc/{pid}/exe")).ok();
             let cached = match self.cache.remove(&pid) {
                 Some((l, p)) if l == link => p,
@@ -87,7 +100,9 @@ impl Scanner {
         self.last = Some(now);
         let mut ticks = HashMap::new();
         for p in procs.iter_mut().filter(|p| wanted(p)) {
-            let Some((t, rss)) = self.stat(p.pid) else { continue };
+            let Some((t, rss)) = self.stat(p.pid) else {
+                continue;
+            };
             p.rss = rss;
             if let Some(&prev) = self.prev_ticks.get(&p.pid).filter(|_| dt > 0.0) {
                 p.cpu = (t.saturating_sub(prev) as f64 / self.clk_tck / dt * 100.0) as f32;
@@ -115,16 +130,34 @@ impl Scanner {
         if raw.is_empty() {
             return Some(None);
         }
-        let args: Vec<String> =
-            raw.split(|&b| b == 0).filter(|a| !a.is_empty()).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
+        let args: Vec<String> = raw
+            .split(|&b| b == 0)
+            .filter(|a| !a.is_empty())
+            .map(|a| String::from_utf8_lossy(a).into_owned())
+            .collect();
         let exe = match link {
-            Some(p) => p.to_string_lossy().trim_end_matches(" (deleted)").to_owned(),
+            Some(p) => p
+                .to_string_lossy()
+                .trim_end_matches(" (deleted)")
+                .to_owned(),
             None => args.first().map(|a| guess_exe(a)).unwrap_or_default(),
         };
         let uid = fs::metadata(&base).ok()?.uid();
-        let user = self.users.get(&uid).cloned().unwrap_or_else(|| uid.to_string());
+        let user = self
+            .users
+            .get(&uid)
+            .cloned()
+            .unwrap_or_else(|| uid.to_string());
         let cmdline = args.join(" ");
-        Some(Some(Proc { pid, exe, args, cmdline, user, cpu: 0.0, rss: 0 }))
+        Some(Some(Proc {
+            pid,
+            exe,
+            args,
+            cmdline,
+            user,
+            cpu: 0.0,
+            rss: 0,
+        }))
     }
 }
 

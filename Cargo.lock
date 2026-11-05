@@ -2183,6 +2183,7 @@ version = "0.2.0"
 dependencies = [
  "eframe",
  "egui_extras",
+ "image",
  "ksni",
  "libc",
  "resvg",

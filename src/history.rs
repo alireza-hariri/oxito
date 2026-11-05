@@ -28,7 +28,10 @@ pub struct Flow {
 }
 
 pub fn now() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 /// Delete the db (and its WAL files) and open an empty one.
@@ -78,7 +81,9 @@ pub fn record(con: &mut Connection, conns: &[Conn]) -> rusqlite::Result<()> {
         let (mut hit, mut d_up, mut d_down) = (0u64, c.d_up, c.d_down);
         if c.new {
             let stored: Option<(u64, u64)> = tx
-                .query_row("SELECT up, down FROM conns WHERE id=?", [&c.id], |r| Ok((r.get(0)?, r.get(1)?)))
+                .query_row("SELECT up, down FROM conns WHERE id=?", [&c.id], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
                 .optional()?;
             match stored {
                 Some((u, d)) => (d_up, d_down) = (c.up.saturating_sub(u), c.down.saturating_sub(d)),
@@ -86,12 +91,18 @@ pub fn record(con: &mut Connection, conns: &[Conn]) -> rusqlite::Result<()> {
                     hit = 1;
                     tx.execute(
                         "INSERT INTO conns VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        params![c.id, c.app, c.user, c.host, c.ip, c.port, c.network, c.outbound, c.rule, ts, ts, c.up, c.down],
+                        params![
+                            c.id, c.app, c.user, c.host, c.ip, c.port, c.network, c.outbound,
+                            c.rule, ts, ts, c.up, c.down
+                        ],
                     )?;
                 }
             }
         }
-        tx.execute("UPDATE conns SET end=?, up=?, down=? WHERE id=?", params![ts, c.up, c.down, c.id])?;
+        tx.execute(
+            "UPDATE conns SET end=?, up=?, down=? WHERE id=?",
+            params![ts, c.up, c.down, c.id],
+        )?;
         tx.execute(
             "INSERT INTO flows VALUES (?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(app, target, port) DO UPDATE SET
@@ -183,17 +194,29 @@ mod tests {
         record(&mut con, &[conn("1", "/usr/bin/a", "x.com", 10, true)]).unwrap();
         record(&mut con, &[conn("1", "/usr/bin/a", "x.com", 10, false)]).unwrap();
         // the same connection seen as "new" again (app restart) must not count twice
-        record(&mut con, &[conn("1", "/usr/bin/a", "x.com", 25, true), conn("2", "/usr/bin/b", "y.com", 5, true)])
-            .unwrap();
+        record(
+            &mut con,
+            &[
+                conn("1", "/usr/bin/a", "x.com", 25, true),
+                conn("2", "/usr/bin/b", "y.com", 5, true),
+            ],
+        )
+        .unwrap();
         let mut apps = apps(&con).unwrap();
         apps.sort_by(|a, b| a.app.cmp(&b.app));
         assert_eq!((apps[0].hits, apps[0].up), (1, 25));
         assert_eq!(apps[1].app, "/usr/bin/b");
-        con.execute("UPDATE flows SET last_seen = last_seen - 600 WHERE app = '/usr/bin/b'", []).unwrap();
+        con.execute(
+            "UPDATE flows SET last_seen = last_seen - 600 WHERE app = '/usr/bin/b'",
+            [],
+        )
+        .unwrap();
         prune(&con, 300).unwrap();
         assert_eq!(super::apps(&con).unwrap().len(), 1);
         drop(con);
-        assert!(open_fresh(&path).map(|c| super::apps(&c).unwrap().is_empty()).unwrap());
+        assert!(open_fresh(&path)
+            .map(|c| super::apps(&c).unwrap().is_empty())
+            .unwrap());
         for ext in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{ext}", path.display()));
         }

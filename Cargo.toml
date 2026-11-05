@@ -13,6 +13,7 @@ libc = "0.2"
 rusqlite = "0.32"
 ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
 resvg = { version = "0.45", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png"] }
 winit = { version = "0.30", default-features = false, features = ["x11"] }
 
 [profile.release]

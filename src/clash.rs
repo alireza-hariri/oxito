@@ -53,11 +53,19 @@ struct RawConn {
 
 /// Plain HTTP/1.0 request; the controller is always local, so no client crate is needed.
 fn request(method: &str, addr: &str, path: &str, secret: &str) -> Result<String, String> {
-    let sock = addr.to_socket_addrs().map_err(|e| e.to_string())?.next().ok_or("bad api address")?;
-    let mut s = TcpStream::connect_timeout(&sock, Duration::from_secs(2)).map_err(|e| e.to_string())?;
+    let sock = addr
+        .to_socket_addrs()
+        .map_err(|e| e.to_string())?
+        .next()
+        .ok_or("bad api address")?;
+    let mut s =
+        TcpStream::connect_timeout(&sock, Duration::from_secs(2)).map_err(|e| e.to_string())?;
     s.set_read_timeout(Some(Duration::from_secs(3))).ok();
-    write!(s, "{method} {path} HTTP/1.0\r\nHost: {addr}\r\nAuthorization: Bearer {secret}\r\n\r\n")
-        .map_err(|e| e.to_string())?;
+    write!(
+        s,
+        "{method} {path} HTTP/1.0\r\nHost: {addr}\r\nAuthorization: Bearer {secret}\r\n\r\n"
+    )
+    .map_err(|e| e.to_string())?;
     let mut buf = String::new();
     s.read_to_string(&mut buf).map_err(|e| e.to_string())?;
     let (head, body) = buf.split_once("\r\n\r\n").ok_or("malformed response")?;
@@ -99,9 +107,10 @@ impl Tracker {
                 };
                 let proc_path = m("processPath");
                 let (app, user) = match proc_path.rfind(" (") {
-                    Some(i) if proc_path.ends_with(')') => {
-                        (proc_path[..i].to_owned(), proc_path[i + 2..proc_path.len() - 1].to_owned())
-                    }
+                    Some(i) if proc_path.ends_with(')') => (
+                        proc_path[..i].to_owned(),
+                        proc_path[i + 2..proc_path.len() - 1].to_owned(),
+                    ),
                     _ => (proc_path, String::new()),
                 };
                 let prev = self.prev.get(&c.id).copied();
@@ -109,10 +118,15 @@ impl Tracker {
                     Some((u, d)) => (c.upload.saturating_sub(u), c.download.saturating_sub(d)),
                     None => (c.upload, c.download),
                 };
-                let (rate_up, rate_down) =
-                    if prev.is_some() && dt > 0.0 { (d_up as f64 / dt, d_down as f64 / dt) } else { (0.0, 0.0) };
+                let (rate_up, rate_down) = if prev.is_some() && dt > 0.0 {
+                    (d_up as f64 / dt, d_down as f64 / dt)
+                } else {
+                    (0.0, 0.0)
+                };
                 seen.insert(c.id.clone(), (c.upload, c.download));
-                let host = Some(m("host")).filter(|h| !h.is_empty()).unwrap_or_else(|| m("destinationIP"));
+                let host = Some(m("host"))
+                    .filter(|h| !h.is_empty())
+                    .unwrap_or_else(|| m("destinationIP"));
                 Conn {
                     id: c.id,
                     app,
