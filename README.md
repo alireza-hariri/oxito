@@ -14,8 +14,14 @@ One-line install (builds from source; needs `cargo` on your PATH):
 curl -fsSL https://raw.githubusercontent.com/alireza-hariri/oxito/main/install.sh | sh
 ```
 
-This installs for your user: the binary to `~/.local/bin`, the icon and an app-menu entry
-(`oxito.desktop`) under `~/.local/share`. Re-run it after pulling changes.
+Downloads the latest prebuilt release binary and installs it for your user: `~/.local/bin`, the
+icon and an app-menu entry (`oxito.desktop`) under `~/.local/share`. Re-run to update.
+
+To build from source instead (needs `cargo`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/alireza-hariri/oxito/main/install-git.sh | sh
+```
 
 ## What it does
 
