@@ -47,8 +47,10 @@ sb_ver=$(fetch "https://api.github.com/repos/$sb_repo/releases/latest" | grep -o
 sb_url="https://github.com/$sb_repo/releases/download/$sb_ver/sing-box-${sb_ver#v}-linux-$sb_arch.tar.gz"
 get "$sb_url" "$tmp/sing-box.tar.gz"
 tar xzf "$tmp/sing-box.tar.gz" -C "$tmp"
-[ -f "$tmp/sing-box-linux-$sb_arch/sing-box" ] || { echo "unexpected sing-box archive layout" >&2; exit 1; }
-install -Dm755 "$tmp/sing-box-linux-$sb_arch/sing-box" "$HOME/.local/oxito/sing-box"
+# the binary sits in a versioned subdir (layout may change between releases)
+sb_bin=$(find "$tmp" -type f -name sing-box | head -n 1)
+[ -n "$sb_bin" ] || { echo "sing-box binary not found in archive" >&2; exit 1; }
+install -Dm755 "$sb_bin" "$HOME/.local/oxito/sing-box"
 
 data="${XDG_DATA_HOME:-$HOME/.local/share}"
 bin="$HOME/.local/bin/oxito"
