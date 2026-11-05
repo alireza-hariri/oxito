@@ -99,16 +99,92 @@ impl Config {
             .map_err(|e| format!("write {}: {e}", self.rules_path.display()))
     }
 
+    /// Index of the first outbound that isn't direct/block/dns.
+    fn vpn_outbound_index(&self) -> Option<usize> {
+        self.data["outbounds"].as_array()?.iter().position(|ob| {
+            !matches!(ob["type"].as_str().unwrap_or(""), "direct" | "block" | "dns")
+        })
+    }
+
     /// First outbound that isn't direct/block/dns.
     pub fn vpn_tag(&self) -> Option<String> {
-        self.data["outbounds"].as_array()?.iter().find_map(|ob| {
-            let t = ob["type"].as_str().unwrap_or("");
-            if matches!(t, "direct" | "block" | "dns") {
-                None
-            } else {
-                ob["tag"].as_str().map(str::to_owned)
+        let i = self.vpn_outbound_index()?;
+        self.data["outbounds"][i]["tag"].as_str().map(str::to_owned)
+    }
+
+    /// `host:port` of the VPN proxy outbound, e.g. `127.0.0.1:10808`.
+    pub fn proxy_addr(&self) -> Option<String> {
+        let ob = &self.data["outbounds"][self.vpn_outbound_index()?];
+        let host = ob["server"].as_str()?;
+        let port = ob["server_port"].as_u64()?;
+        Some(format!("{host}:{port}"))
+    }
+
+    /// Set the proxy address as `host[:port]`; the port defaults to the current one, then 10808.
+    /// Returns true if the config changed (save it afterwards).
+    pub fn set_proxy_addr(&mut self, addr: &str) -> Result<bool, String> {
+        let addr = addr.trim();
+        if addr.is_empty() {
+            return Err("proxy address is empty".into());
+        }
+        let (host, port) = match addr.rsplit_once(':') {
+            Some((h, p)) => (
+                h,
+                p.parse::<u16>()
+                    .map_err(|_| format!("bad port in \"{addr}\""))? as u64,
+            ),
+            None => {
+                let i = self
+                    .vpn_outbound_index()
+                    .ok_or("config has no proxy outbound")?;
+                let port = self.data["outbounds"][i]["server_port"]
+                    .as_u64()
+                    .unwrap_or(10808);
+                (addr, port)
             }
-        })
+        };
+        let i = self
+            .vpn_outbound_index()
+            .ok_or("config has no proxy outbound")?;
+        let ob = &mut self.data["outbounds"][i];
+        let mut changed = false;
+        if ob["server"].as_str() != Some(host) {
+            ob["server"] = json!(host);
+            changed = true;
+        }
+        if ob["server_port"].as_u64() != Some(port) {
+            ob["server_port"] = json!(port);
+            changed = true;
+        }
+        Ok(changed)
+    }
+
+    /// MTU of the TUN inbound, e.g. 1400.
+    pub fn mtu(&self) -> Option<u64> {
+        self.data["inbounds"]
+            .as_array()?
+            .iter()
+            .find(|i| i["type"].as_str() == Some("tun"))?["mtu"]
+            .as_u64()
+    }
+
+    /// Set the TUN inbound MTU (1280–9000). Returns true if the config changed; save it and
+    /// restart sing-box afterwards (changing MTU re-creates the TUN).
+    pub fn set_mtu(&mut self, mtu: u64) -> Result<bool, String> {
+        if !(1280..=9000).contains(&mtu) {
+            return Err(format!("MTU {mtu} out of range (1280–9000)"));
+        }
+        let Some(i) = self.data["inbounds"].as_array().and_then(|a| {
+            a.iter().position(|i| i["type"].as_str() == Some("tun"))
+        }) else {
+            return Err("config has no tun inbound".into());
+        };
+        let ob = &mut self.data["inbounds"][i];
+        if ob["mtu"].as_u64() == Some(mtu) {
+            return Ok(false);
+        }
+        ob["mtu"] = json!(mtu);
+        Ok(true)
     }
 
     /// (external_controller, secret) of the Clash API.
@@ -332,7 +408,13 @@ mod tests {
             .unwrap()
             .iter()
             .all(|r| r.get(APP_KEY).is_none()));
-        assert_eq!(route["rule_set"][0]["path"], "/tmp/oxito/config.rules.json");
+        let oxito = route["rule_set"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["tag"] == RULE_SET_TAG)
+            .unwrap();
+        assert_eq!(oxito["path"], "/tmp/oxito/config.rules.json");
         assert_eq!(route["find_process"], true);
         assert!(!c.setup());
     }
@@ -357,6 +439,30 @@ mod tests {
         assert_eq!(c.rules["rules"][1], json!({ DOMAIN_KEY: ["example.com"] }));
         assert!(c.remove(DOMAIN_KEY, "example.com"));
         assert_eq!(c.rules["rules"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn mtu_roundtrip() {
+        let mut c = cfg();
+        assert_eq!(c.mtu(), Some(1400));
+        assert!(c.set_mtu(1400).err().is_none());
+        assert!(!c.set_mtu(1400).unwrap());
+        assert!(c.set_mtu(1500).unwrap());
+        assert_eq!(c.mtu(), Some(1500));
+        assert!(c.set_mtu(1000).is_err());
+        assert!(c.set_mtu(10000).is_err());
+    }
+
+    #[test]
+    fn proxy_addr_roundtrip() {
+        let mut c = cfg();
+        assert_eq!(c.proxy_addr().as_deref(), Some("127.0.0.1:10808"));
+        assert!(c.set_proxy_addr("10.0.0.5").unwrap());
+        assert_eq!(c.proxy_addr().as_deref(), Some("10.0.0.5:10808"));
+        assert!(c.set_proxy_addr("10.0.0.5:9999").unwrap());
+        assert_eq!(c.proxy_addr().as_deref(), Some("10.0.0.5:9999"));
+        assert!(!c.set_proxy_addr("10.0.0.5:9999").unwrap());
+        assert!(c.set_proxy_addr("10.0.0.5:notaport").is_err());
     }
 
     #[test]

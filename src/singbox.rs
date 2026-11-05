@@ -117,7 +117,7 @@ pub fn check(binary: &str, config: &Path) -> Result<(), String> {
 }
 
 /// Bumped whenever the supervisor script changes, so an old one gets replaced on the next reset.
-const SUPERVISOR_VERSION: &str = "2";
+const SUPERVISOR_VERSION: &str = "3";
 
 /// pid of the sing-box our (current) supervisor runs, if it is alive.
 pub fn managed_pid(state: &Path) -> Option<u32> {
@@ -177,7 +177,10 @@ setsid -f /bin/sh -c '
     ( while alive $sb; do sleep 0.5; done; echo "exited $sb" >&3 ) &
   }
   halt() {
-    kill $sb 2>/dev/null
+    # SIGINT is what Ctrl+C sends: sing-box shuts down cleanly (removes the TUN device,
+    # closes listeners) instead of being killed. -9 is only a last-resort fallback if it
+    # refuses to exit within 5s.
+    kill -INT $sb 2>/dev/null
     i=0
     while alive $sb && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
     kill -9 $sb 2>/dev/null
@@ -304,7 +307,7 @@ pub fn stop(state: &Path, pids: &[u32]) -> Result<(), String> {
     if rest.is_empty() {
         return Ok(());
     }
-    let mut args = vec!["kill"];
+    let mut args = vec!["kill", "-INT"];
     args.extend(rest.iter().map(String::as_str));
     run_root(&args)
 }

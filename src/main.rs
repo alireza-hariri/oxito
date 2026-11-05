@@ -9,9 +9,11 @@ mod icon;
 mod monitor;
 mod procs;
 mod singbox;
+mod single;
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 const EXAMPLE_CONFIG: &str = include_str!("../example_config.json");
 
@@ -63,6 +65,27 @@ fn main() -> eframe::Result {
             std::process::exit(1);
         }
     };
+    if let Err(e) = fs::create_dir_all(&paths.state) {
+        eprintln!("error: creating {}: {e}", paths.state.display());
+        std::process::exit(1);
+    }
+    let socket = paths.state.join("ui.sock");
+    // the UI's egui context, filled in once the app is created; a second instance's "show"
+    // request needs it to bring the (maybe hidden) window back
+    let ctx_slot: Arc<Mutex<Option<eframe::egui::Context>>> = Arc::default();
+    if let Err(e) = single::primary_or_notify(&socket, {
+        let slot = ctx_slot.clone();
+        move || {
+            if let Some(ctx) = slot.lock().unwrap().clone() {
+                ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Focus);
+                ctx.request_repaint();
+            }
+        }
+    }) {
+        eprintln!("{e}");
+        std::process::exit(0);
+    }
     let opts = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("oxito")
@@ -77,9 +100,11 @@ fn main() -> eframe::Result {
         })),
         ..Default::default()
     };
-    eframe::run_native(
+    let res = eframe::run_native(
         "oxito",
         opts,
-        Box::new(|cc| Ok(Box::new(app::App::new(cc, paths)))),
-    )
+        Box::new(|cc| Ok(Box::new(app::App::new(cc, paths, ctx_slot)))),
+    );
+    single::cleanup(&socket);
+    res
 }

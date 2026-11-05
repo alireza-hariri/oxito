@@ -15,7 +15,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const FILTER_ID: &str = "filter";
@@ -194,6 +194,8 @@ pub struct App {
     flows: (String, Option<Instant>, Vec<Flow>),
     new_app: String,
     new_domain: String,
+    new_proxy: String,
+    new_mtu: String,
     busy: Option<String>,
     tx: Sender<Result<String, String>>,
     rx: Receiver<Result<String, String>>,
@@ -207,7 +209,8 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext, paths: Paths) -> Self {
+    pub fn new(cc: &eframe::CreationContext, paths: Paths, ctx_slot: Arc<Mutex<Option<eframe::egui::Context>>>) -> Self {
+        *ctx_slot.lock().unwrap() = Some(cc.egui_ctx.clone());
         install_fallback_fonts(&cc.egui_ctx);
         let (tx, rx) = channel();
         let mut messages = vec![];
@@ -269,6 +272,8 @@ impl App {
             flows: (String::new(), None, vec![]),
             new_app: String::new(),
             new_domain: String::new(),
+            new_proxy: String::new(),
+            new_mtu: String::new(),
             busy: None,
             tx,
             rx,
@@ -391,6 +396,42 @@ impl App {
             // not ours (or not running): take it over once; later changes won't need a password
             self.reset();
         }
+    }
+
+    /// Change the proxy address in the config, save it, and reload sing-box.
+    fn set_proxy(&mut self, addr: &str) {
+        let changed = match self.cfg.set_proxy_addr(addr) {
+            Ok(c) => c,
+            Err(e) => return self.msg(Err(e)),
+        };
+        if !changed {
+            return self.msg(Ok(format!("proxy {addr}: nothing to change")));
+        }
+        if let Err(e) = self.cfg.save() {
+            return self.msg(Err(e));
+        }
+        self.msg(Ok(format!("proxy: {addr} (reloading)")));
+        self.apply();
+    }
+
+    /// Change the TUN MTU in the config, save it, and restart sing-box (the TUN is re-created).
+    fn set_mtu(&mut self, mtu: &str) {
+        let mtu: u64 = match mtu.trim().parse() {
+            Ok(v) => v,
+            Err(_) => return self.msg(Err(format!("MTU: {mtu:?} is not a number"))),
+        };
+        let changed = match self.cfg.set_mtu(mtu) {
+            Ok(c) => c,
+            Err(e) => return self.msg(Err(e)),
+        };
+        if !changed {
+            return self.msg(Ok(format!("MTU {mtu}: nothing to change")));
+        }
+        if let Err(e) = self.cfg.save() {
+            return self.msg(Err(e));
+        }
+        self.msg(Ok(format!("MTU: {mtu} (restarting)")));
+        self.apply();
     }
 
     fn edit_rule(&mut self, key: &str, value: &str, add: bool) {
@@ -581,7 +622,7 @@ impl App {
             ui.separator();
             ui.selectable_value(&mut self.tab, Tab::Apps, "Apps");
             let n = self.cfg.items(APP_KEY).len() + self.cfg.items(DOMAIN_KEY).len();
-            ui.selectable_value(&mut self.tab, Tab::Routing, format!("VPN routes ({n})"));
+            ui.selectable_value(&mut self.tab, Tab::Routing, format!("Config ({n})"));
             ui.selectable_value(&mut self.tab, Tab::SingBox, "sing-box");
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui
@@ -1164,6 +1205,42 @@ impl App {
                 self.apply();
             }
         });
+        ui.horizontal(|ui| {
+            ui.label("Proxy address:");
+            let current = self.cfg.proxy_addr().unwrap_or_else(|| "(none!)".into());
+            let r = ui.add(
+                egui::TextEdit::singleline(&mut self.new_proxy)
+                    .hint_text(&current)
+                    .desired_width(180.0),
+            );
+            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                && !self.new_proxy.trim().is_empty()
+            {
+                let addr = std::mem::take(&mut self.new_proxy);
+                self.set_proxy(addr.trim());
+            }
+            ui.label(RichText::new(&current).weak());
+        });
+        ui.horizontal(|ui| {
+            let current = self.cfg.mtu().map(|m| m.to_string()).unwrap_or_default();
+            ui.label("MTU:");
+            let r = ui.add(
+                egui::TextEdit::singleline(&mut self.new_mtu)
+                    .hint_text(&current)
+                    .desired_width(70.0),
+            );
+            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                && !self.new_mtu.trim().is_empty()
+            {
+                let mtu = std::mem::take(&mut self.new_mtu);
+                self.set_mtu(&mtu);
+            }
+            ui.label(
+                RichText::new(if current.is_empty() { "(none)".into() } else { current })
+                    .weak(),
+            )
+            .on_hover_text("TUN MTU, 1280–9000; needs a sing-box restart");
+        });
         ui.label(
             RichText::new(self.paths.config.display().to_string())
                 .monospace()
@@ -1491,6 +1568,21 @@ impl App {
 }
 
 impl eframe::App for App {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // closing the UI stops sing-box too: a graceful SIGINT (what Ctrl+C sends), not a hard kill.
+        // Synchronous so the supervisor has actually been told before we exit; it then reaps
+        // sing-box on its own, so a still-running UI process isn't needed.
+        let pids: Vec<u32> = self
+            .snap
+            .instances
+            .iter()
+            .filter(|i| self.uses_our_config(i))
+            .map(|i| i.pid)
+            .collect();
+        let state = self.paths.state.clone();
+        let _ = std::thread::spawn(move || singbox::stop(&state, &pids)).join();
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         while let Ok(r) = self.rx.try_recv() {
             self.busy = None;
