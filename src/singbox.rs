@@ -9,6 +9,7 @@
 //! for `reload` (a clean restart) / `stop`, restarts sing-box if it crashes, and so later reloads
 //! need no password.
 
+use crate::procs::Proc;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -26,31 +27,43 @@ pub struct Instance {
 
 /// All running `sing-box run` processes (sudo/pkexec wrappers excluded).
 pub fn find_all() -> Vec<Instance> {
-    let mut out = Vec::new();
-    let Ok(dir) = fs::read_dir("/proc") else { return out };
-    for e in dir.flatten() {
-        let Some(pid) = e.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else { continue };
-        let Ok(raw) = fs::read(format!("/proc/{pid}/cmdline")) else { continue };
-        let comm = fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
-        let argv: Vec<String> =
-            raw.split(|&b| b == 0).filter(|a| !a.is_empty()).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
-        if matches!(comm.trim(), "sudo" | "pkexec" | "doas")
-            || !argv.first().is_some_and(|a| a.ends_with("sing-box"))
-            || !argv.iter().any(|a| a == "run")
-        {
-            continue;
-        }
-        let config = argv.windows(2).find(|w| w[0] == "-c" || w[0] == "--config").map(|w| {
-            let p = PathBuf::from(&w[1]);
-            if p.is_absolute() {
-                p
-            } else {
-                fs::read_link(format!("/proc/{pid}/cwd")).map(|cwd| cwd.join(&p)).unwrap_or(p)
-            }
-        });
-        out.push(Instance { pid, binary: argv[0].clone(), config });
+    let Ok(dir) = fs::read_dir("/proc") else { return vec![] };
+    dir.flatten()
+        .filter_map(|e| {
+            let pid = e.file_name().to_str()?.parse::<u32>().ok()?;
+            let raw = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+            let argv: Vec<String> = raw
+                .split(|&b| b == 0)
+                .filter(|a| !a.is_empty())
+                .map(|a| String::from_utf8_lossy(a).into_owned())
+                .collect();
+            instance(pid, &argv)
+        })
+        .collect()
+}
+
+/// The sing-box instances among already-scanned processes.
+pub fn in_procs(procs: &[Proc]) -> Vec<Instance> {
+    procs.iter().filter_map(|p| instance(p.pid, &p.args)).collect()
+}
+
+fn instance(pid: u32, argv: &[String]) -> Option<Instance> {
+    if !argv.first().is_some_and(|a| a.ends_with("sing-box")) || !argv.iter().any(|a| a == "run") {
+        return None;
     }
-    out
+    let comm = fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+    if matches!(comm.trim(), "sudo" | "pkexec" | "doas") {
+        return None;
+    }
+    let config = argv.windows(2).find(|w| w[0] == "-c" || w[0] == "--config").map(|w| {
+        let p = PathBuf::from(&w[1]);
+        if p.is_absolute() {
+            p
+        } else {
+            fs::read_link(format!("/proc/{pid}/cwd")).map(|cwd| cwd.join(&p)).unwrap_or(p)
+        }
+    });
+    Some(Instance { pid, binary: argv[0].clone(), config })
 }
 
 /// Best guess at the sing-box binary: a running one, the v2rayN bundle, or PATH.

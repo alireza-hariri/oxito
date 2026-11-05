@@ -5,6 +5,7 @@ use crate::clash::{Conn, Tracker};
 use crate::history::{self, AppHistory};
 use crate::procs::{Proc, Scanner};
 use crate::singbox::{self, Instance};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -22,7 +23,8 @@ pub struct Snapshot {
 }
 
 pub struct Monitor {
-    pub snapshot: Arc<Mutex<Snapshot>>,
+    /// Replaced whole each sample, so readers take a cheap Arc clone instead of copying it.
+    pub snapshot: Arc<Mutex<Arc<Snapshot>>>,
     /// (address, secret) of the Clash API; updated when the config changes.
     pub api: Arc<Mutex<(String, String)>>,
     /// History older than this many seconds is deleted (0 = keep the whole session).
@@ -38,7 +40,7 @@ impl Monitor {
         interval: Duration,
         on_sample: impl Fn(&[Instance]) + Send + 'static,
     ) -> Self {
-        let snapshot = Arc::new(Mutex::new(Snapshot::default()));
+        let snapshot = Arc::new(Mutex::new(Arc::new(Snapshot::default())));
         let api = Arc::new(Mutex::new(api));
         let retention = Arc::new(AtomicU64::new(retention));
         let (snap, api2, keep) = (snapshot.clone(), api.clone(), retention.clone());
@@ -48,8 +50,8 @@ impl Monitor {
             let mut con = history::open_fresh(&db);
             let mut pruned = Instant::now();
             loop {
-                let procs = scanner.scan();
-                let instances = singbox::find_all();
+                let mut procs = scanner.scan();
+                let instances = singbox::in_procs(&procs);
                 let (addr, secret) = api2.lock().unwrap().clone();
                 let (conns, api_error) = if addr.is_empty() {
                     (vec![], Some("clash_api is not enabled in the config".into()))
@@ -75,8 +77,13 @@ impl Monitor {
                     },
                     Err(e) => (vec![], Some(format!("history db {}: {e}", db.display()))),
                 };
+                // CPU / memory only for the apps the list shows
+                let shown: HashSet<&str> =
+                    history.iter().map(|h| h.app.as_str()).chain(conns.iter().map(|c| c.app.as_str())).collect();
+                scanner.usage(&mut procs, |p| shown.contains(p.exe.as_str()));
                 on_sample(&instances);
-                *snap.lock().unwrap() = Snapshot { procs, conns, api_error, instances, history, db_error };
+                let s = Snapshot { procs, conns, api_error, instances, history, db_error };
+                *snap.lock().unwrap() = Arc::new(s);
                 ctx.request_repaint();
                 std::thread::sleep(interval);
             }

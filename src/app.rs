@@ -14,6 +14,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const FILTER_ID: &str = "filter";
@@ -162,7 +163,7 @@ pub struct App {
     cfg: Config,
     settings: Settings,
     monitor: Monitor,
-    snap: Snapshot,
+    snap: Arc<Snapshot>,
     tab: Tab,
     sort: SortKey,
     desc: bool,
@@ -225,7 +226,7 @@ impl App {
             cfg,
             settings,
             monitor,
-            snap: Snapshot::default(),
+            snap: Arc::default(),
             tab: Tab::Apps,
             sort: SortKey::LastSeen,
             desc: true,
@@ -254,7 +255,7 @@ impl App {
             app.reset();
         } else if migrated && instances.iter().any(|i| app.uses_our_config(i)) {
             // the running sing-box has the old config, without the rule-set
-            app.snap.instances = instances;
+            Arc::make_mut(&mut app.snap).instances = instances;
             app.apply();
         }
         app
@@ -1147,7 +1148,7 @@ impl eframe::App for App {
             self.busy = None;
             self.msg(r);
         }
-        self.snap = self.monitor.snapshot.lock().unwrap().clone();
+        self.snap = Arc::clone(&self.monitor.snapshot.lock().unwrap());
         self.global_keys(ctx);
 
         let mut actions = Vec::new();
@@ -1255,8 +1256,21 @@ fn rate(n: f64) -> String {
 }
 
 fn tail(path: &Path, lines: usize) -> String {
-    let text = fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
-    let text = strip_ansi(&text);
+    use std::io::{Read, Seek, SeekFrom};
+    // the log grows without bound; only read its end (~250 bytes a line is plenty)
+    let max = lines as u64 * 250;
+    let read = |f: &mut fs::File| -> std::io::Result<(Vec<u8>, bool)> {
+        let start = f.metadata()?.len().saturating_sub(max);
+        f.seek(SeekFrom::Start(start))?;
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf)?;
+        Ok((buf, start > 0))
+    };
+    let Ok((buf, cut)) = fs::File::open(path).and_then(|mut f| read(&mut f)) else { return String::new() };
+    let text = String::from_utf8_lossy(&buf);
+    // drop the partial first line when reading from the middle
+    let text = if cut { text.split_once('\n').map_or("", |(_, rest)| rest) } else { &text };
+    let text = strip_ansi(text);
     let all: Vec<&str> = text.lines().collect();
     all[all.len().saturating_sub(lines)..].join("\n")
 }
