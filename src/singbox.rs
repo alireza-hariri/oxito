@@ -16,7 +16,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub const DEFAULT_BINARY: &str = "Application/v2rayN-linux-64/bin/sing_box/sing-box";
+pub const DEFAULT_BINARY: &str = ".local/oxito/sing-box";
 
 #[derive(Clone, Debug)]
 pub struct Instance {
@@ -85,11 +85,7 @@ pub fn default_binary() -> String {
     if let Some(i) = find_all().into_iter().next() {
         return i.binary;
     }
-    let bundled = home().join(DEFAULT_BINARY);
-    if bundled.exists() {
-        return bundled.to_string_lossy().into_owned();
-    }
-    let local = home().join(".local/oxito/sing-box");
+    let local = home().join(DEFAULT_BINARY);
     if local.exists() {
         return local.to_string_lossy().into_owned();
     }
