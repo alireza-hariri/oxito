@@ -8,8 +8,14 @@ cargo build --release
 ./target/release/oxito            # or: oxito -c /path/to/config.json
 ```
 
-`./install.sh` builds and installs it for your user: the binary to `~/.local/bin`, the icon and an
-app-menu entry (`oxito.desktop`) under `~/.local/share`. Re-run it after pulling changes.
+One-line install (builds from source; needs `cargo` on your PATH):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/alireza-hariri/oxito/main/install.sh | sh
+```
+
+This installs for your user: the binary to `~/.local/bin`, the icon and an app-menu entry
+(`oxito.desktop`) under `~/.local/share`. Re-run it after pulling changes.
 
 ## What it does
 
